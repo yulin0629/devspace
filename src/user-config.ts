@@ -26,6 +26,7 @@ export interface DevspaceUserConfig {
 
 export interface DevspaceAuthConfig {
   ownerToken?: string;
+  staticBearerToken?: string;
 }
 
 export interface DevspaceFiles {

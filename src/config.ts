@@ -4,6 +4,7 @@ import { expandHomePath } from "./roots.js";
 import type { LoggingConfig, LogFormat, LogLevel } from "./logger.js";
 import type { OAuthConfig } from "./oauth-provider.js";
 import { devspaceAgentsDir, devspaceSkillsDir, loadDevspaceFiles } from "./user-config.js";
+import type { DevspaceAuthConfig } from "./user-config.js";
 import { resolveSubagentsConfig, type SubagentsConfig } from "./local-agent-config.js";
 
 export type ToolMode = "minimal" | "full" | "codex";
@@ -174,9 +175,13 @@ function parseRequiredSecret(value: string | undefined, name: string): string {
   return secret;
 }
 
-function parseOAuthConfig(env: NodeJS.ProcessEnv, ownerToken: string | undefined): OAuthConfig {
+function parseOAuthConfig(env: NodeJS.ProcessEnv, auth: DevspaceAuthConfig): OAuthConfig {
+  const staticBearerToken = env.DEVSPACE_STATIC_BEARER_TOKEN ?? auth.staticBearerToken;
   return {
-    ownerToken: parseRequiredSecret(env.DEVSPACE_OAUTH_OWNER_TOKEN ?? ownerToken, "DEVSPACE_OAUTH_OWNER_TOKEN"),
+    ownerToken: parseRequiredSecret(env.DEVSPACE_OAUTH_OWNER_TOKEN ?? auth.ownerToken, "DEVSPACE_OAUTH_OWNER_TOKEN"),
+    ...(staticBearerToken === undefined
+      ? {}
+      : { staticBearerToken: parseRequiredSecret(staticBearerToken, "DEVSPACE_STATIC_BEARER_TOKEN") }),
     accessTokenTtlSeconds: parsePositiveInteger(
       env.DEVSPACE_OAUTH_ACCESS_TOKEN_TTL_SECONDS,
       DEFAULT_OAUTH_ACCESS_TOKEN_TTL_SECONDS,
@@ -227,7 +232,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   return {
     host,
     port,
-    oauth: parseOAuthConfig(env, files.auth.ownerToken),
+    oauth: parseOAuthConfig(env, files.auth),
     allowedRoots: parseAllowedRoots(env.DEVSPACE_ALLOWED_ROOTS ?? files.config.allowedRoots),
     allowedHosts: parseAllowedHosts(env.DEVSPACE_ALLOWED_HOSTS, derivedAllowedHosts),
     publicBaseUrl,

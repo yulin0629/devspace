@@ -36,6 +36,7 @@ npx @waishnav/devspace config set publicBaseUrl https://devspace.example.com
 | `DEVSPACE_PUBLIC_BASE_URL` | Public origin for the server, without `/mcp`. |
 | `DEVSPACE_ALLOWED_HOSTS` | Optional Host header allowlist override. |
 | `DEVSPACE_OAUTH_OWNER_TOKEN` | Owner password for OAuth approval. Must be at least 16 characters. |
+| `DEVSPACE_STATIC_BEARER_TOKEN` | Optional fixed bearer token (or `staticBearerToken` in `auth.json`) accepted on `/mcp` without OAuth, e.g. for a ChatGPT connector using API-key auth. Must be at least 16 characters. |
 | `DEVSPACE_WORKTREE_ROOT` | Directory for managed Git worktrees. Defaults to `~/.devspace/worktrees`. |
 | `DEVSPACE_STATE_DIR` | Directory for SQLite state. Defaults to `~/.local/share/devspace`. |
 
