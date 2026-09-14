@@ -10,6 +10,57 @@ import { SqliteOAuthStore } from "./oauth-store.js";
 import { createServer } from "./server.js";
 import { writeTestDevspaceConfig } from "./test-support/config.test.js";
 
+test("HTTP MCP accepts the configured static bearer without weakening OAuth", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "devspace-http-static-bearer-"));
+  const env = writeTestDevspaceConfig(join(root, "config"), {
+    server: { publicBaseUrl: "https://agent.example.com" },
+    storage: { stateDir: join(root, "state") },
+    workspaces: { allowedRoots: [root] },
+    logging: { level: "silent" },
+  });
+  const config = loadConfig({
+    ...env,
+    DEVSPACE_STATIC_BEARER_TOKEN: "test-static-bearer-token-long-enough",
+  });
+  const running = createServer(config);
+  const listener = running.app.listen(0, "127.0.0.1");
+  t.after(async () => {
+    await running.close();
+    listener.closeAllConnections();
+    await new Promise<void>((resolve, reject) => listener.close((error) => error ? reject(error) : resolve()));
+    await rm(root, { recursive: true, force: true });
+  });
+  await once(listener, "listening");
+  const address = listener.address();
+  assert.ok(address && typeof address !== "string");
+
+  for (const [token, expectedStatus] of [
+    ["test-static-bearer-token-long-enough", 200],
+    ["wrong-static-bearer-token-long-enough", 401],
+  ] as const) {
+    const response: globalThis.Response = await fetch(`http://127.0.0.1:${address.port}/mcp`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: {
+          protocolVersion: "2025-11-25",
+          capabilities: {},
+          clientInfo: { name: "static-bearer-test", version: "1.0.0" },
+        },
+      }),
+      signal: AbortSignal.timeout(5000),
+    });
+    assert.equal(response.status, expectedStatus, await response.text());
+  }
+});
+
 test("HTTP MCP enforces canonical and exact alias bearer resources", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "devspace-http-oauth-"));
   const canonical = "https://agent.example.com/mcp";

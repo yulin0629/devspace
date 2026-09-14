@@ -89,6 +89,19 @@ or `[::1]`, with optional ports. Restart DevSpace after changing
 `oauth.allowedResourceUrls`: the provider reads this policy at server creation.
 After restarting, refresh tokens for removed aliases can no longer mint tokens.
 
+### Optional static bearer token
+
+This fork can also accept one fixed bearer token on `/mcp` for clients that cannot use the OAuth flow. Keep it in `~/.devspace/auth.json`, alongside the owner token:
+
+```json
+{
+  "ownerToken": "...",
+  "staticBearerToken": "..."
+}
+```
+
+`DEVSPACE_STATIC_BEARER_TOKEN` overrides the stored value for deployments that inject secrets at process start. The static token grants the same MCP scope as an approved DevSpace OAuth token; use a long random secret and treat it as equivalent to remote DevSpace access. OAuth remains enabled and unchanged for every other bearer token.
+
 ## Tool modes and UI
 
 `tools.mode` accepts two values:
@@ -197,12 +210,13 @@ Linux; the tool is not registered on macOS, Windows, or BSD.
 
 ## Environment boundary
 
-Only two user-facing DevSpace environment variables remain:
+Only three user-facing DevSpace environment variables remain in this fork:
 
 | Variable | Purpose |
 | --- | --- |
 | `DEVSPACE_CONFIG_DIR` | Bootstrap location for `config.jsonc`, `auth.json`, skills, and profiles. |
 | `DEVSPACE_OAUTH_OWNER_TOKEN` | Optional secret override for the owner token stored in `auth.json`. |
+| `DEVSPACE_STATIC_BEARER_TOKEN` | Optional override for the fixed MCP bearer token stored in `auth.json`. |
 
 Durable environment settings were removed in v1.1. Move existing deployment
 values to these JSONC keys:

@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { access, realpath } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -813,11 +813,30 @@ export function createServer(
   const mcpUrl = new URL("/mcp", config.publicBaseUrl);
   const resourceServerUrl = resourceUrlFromServerUrl(mcpUrl);
   const oauthProvider = new SingleUserOAuthProvider(config.oauth, mcpUrl, config.stateDir);
-  const bearerAuth = requireBearerAuth({
+  const oauthBearerAuth = requireBearerAuth({
     verifier: oauthProvider,
     requiredScopes: [config.oauth.scopes[0] ?? "devspace"],
     resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(resourceServerUrl),
   });
+  const bearerAuth: express.RequestHandler = (req, res, next) => {
+    const staticToken = config.staticBearerToken;
+    const header = req.header("authorization") ?? "";
+    if (staticToken !== undefined && header.startsWith("Bearer ")) {
+      const presented = Buffer.from(header.slice("Bearer ".length));
+      const expected = Buffer.from(staticToken);
+      if (presented.length === expected.length && timingSafeEqual(presented, expected)) {
+        req.auth = {
+          token: staticToken,
+          clientId: "static-bearer",
+          scopes: config.oauth.scopes,
+          resource: resourceServerUrl,
+        };
+        next();
+        return;
+      }
+    }
+    oauthBearerAuth(req, res, next);
+  };
   const workspaceStore = createWorkspaceStore(config.stateDir);
   const workspaces = new WorkspaceRegistry(config, workspaceStore);
   const reviewCheckpoints = createReviewCheckpointManager();

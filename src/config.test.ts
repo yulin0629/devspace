@@ -77,7 +77,10 @@ try {
       allowedRedirectHosts: ["chatgpt.com", "example.com"],
     },
   }, env);
-  writeDevspaceAuth({ ownerToken: "persisted-owner-token-long-enough" }, env);
+  writeDevspaceAuth({
+    ownerToken: "persisted-owner-token-long-enough",
+    staticBearerToken: "persisted-static-bearer-token",
+  }, env);
 
   const configured = loadConfig({ DEVSPACE_CONFIG_DIR: configDir });
   assert.equal(configured.configDir, configDir);
@@ -105,6 +108,7 @@ try {
   assert.equal(configured.subagents.enabled, true);
   assert.equal(configured.subagents.instructions, "preload");
   assert.equal(configured.oauth.ownerToken, "persisted-owner-token-long-enough");
+  assert.equal(configured.staticBearerToken, "persisted-static-bearer-token");
   assert.equal(configured.oauth.accessTokenTtlSeconds, 120);
   assert.deepEqual(configured.oauth.scopes, ["devspace", "admin"]);
   assert.deepEqual(configured.oauth.allowedResourceUrls, [
@@ -121,6 +125,10 @@ try {
   });
 
   assert.equal(loadConfig(env).oauth.ownerToken, env.DEVSPACE_OAUTH_OWNER_TOKEN);
+  assert.equal(
+    loadConfig({ ...env, DEVSPACE_STATIC_BEARER_TOKEN: "env-static-bearer-token" }).staticBearerToken,
+    "env-static-bearer-token",
+  );
 } finally {
   rmSync(configDir, { recursive: true, force: true });
 }

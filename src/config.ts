@@ -13,6 +13,7 @@ export interface ServerConfig {
   host: string;
   port: number;
   oauth: OAuthConfig;
+  staticBearerToken?: string;
   allowedRoots: string[];
   allowedHosts: string[];
   publicBaseUrl: string;
@@ -62,6 +63,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
       allowedResourceUrls: stored.oauth.allowedResourceUrls,
       allowedRedirectHosts: stored.oauth.allowedRedirectHosts,
     },
+    staticBearerToken: parseOptionalSecret(
+      env.DEVSPACE_STATIC_BEARER_TOKEN ?? files.auth.staticBearerToken,
+      "Static bearer token",
+    ),
     allowedRoots: normalizePaths(stored.workspaces.allowedRoots, [process.cwd()]),
     allowedHosts: normalizeAllowedHosts(derivedAllowedHosts),
     publicBaseUrl,
@@ -105,6 +110,17 @@ function parseRequiredSecret(value: string | undefined): string {
   if (secret.length < 16) {
     throw new Error("OAuth owner token must be at least 16 characters long.");
   }
+  return secret;
+}
+
+function parseOptionalSecret(
+  value: string | undefined,
+  label: string,
+): string | undefined {
+  if (value === undefined) return undefined;
+  const secret = value.trim();
+  if (!secret) throw new Error(`${label} cannot be empty.`);
+  if (secret.length < 16) throw new Error(`${label} must be at least 16 characters long.`);
   return secret;
 }
 
