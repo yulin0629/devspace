@@ -36,6 +36,7 @@ test("HTTP MCP accepts the configured static bearer without weakening OAuth", as
 
   for (const [token, expectedStatus] of [
     ["test-static-bearer-token-long-enough", 200],
+    ["test-static-bearer-token-long-enougH", 401],
     ["wrong-static-bearer-token-long-enough", 401],
   ] as const) {
     const response: globalThis.Response = await fetch(`http://127.0.0.1:${address.port}/mcp`, {

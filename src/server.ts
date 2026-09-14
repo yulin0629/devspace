@@ -828,7 +828,7 @@ export function createServer(
         req.auth = {
           token: staticToken,
           clientId: "static-bearer",
-          scopes: config.oauth.scopes,
+          scopes: [config.oauth.scopes[0] ?? "devspace"],
           resource: resourceServerUrl,
         };
         next();
