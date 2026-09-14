@@ -1,15 +1,23 @@
 import { randomBytes } from "node:crypto";
 import type { Stats } from "node:fs";
+import { Result, type Result as BetterResult } from "better-result";
 import type {
   WorkspaceConversationBinding,
   WorkspaceMode,
+  WorkspaceSession,
   WorkspaceStore,
 } from "./workspace-store.js";
 import { mkdir, opendir, readFile, realpath, stat } from "node:fs/promises";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { loadProjectContextFiles } from "@earendil-works/pi-coding-agent";
 import type { ServerConfig } from "./config.js";
-import { createManagedWorktree } from "./git-worktrees.js";
+import {
+  createManagedWorktree,
+  discardRestoredManagedWorktree,
+  ManagedWorktreeError,
+  restoreManagedWorktree,
+  type ManagedWorktreeFeatureError,
+} from "./git-worktrees.js";
 import {
   AccessDeniedError,
   assertAllowedPath,
@@ -18,7 +26,6 @@ import {
 } from "./roots.js";
 import {
   loadWorkspaceSkills,
-  markSkillActivated,
   resolveSkillReadPath,
   type LoadedSkills,
   type SkillReadResolution,
@@ -55,7 +62,6 @@ export interface Workspace {
   skills: LoadedSkills["skills"];
   skillDiagnostics: LoadedSkills["diagnostics"];
   agentProfiles: LocalAgentProfile[];
-  activatedSkillDirs: Set<string>;
 }
 
 export interface WorkspaceContext {
@@ -71,6 +77,8 @@ export interface WorkspaceReadPath {
   readRoots: string[];
   skillRead?: SkillReadResolution;
 }
+
+type InitialAgentsFileSource = "global" | "workspace";
 
 export interface OpenWorkspaceInput {
   path: string;
@@ -88,9 +96,15 @@ type DirectoryOps = {
   mkdir: (path: string, options: { recursive: true }) => Promise<unknown>;
 };
 
+const MAX_CACHED_WORKSPACES = 32;
+
 export class WorkspaceRegistry {
   private readonly workspaces = new Map<string, Workspace>();
   private readonly pendingCheckoutOpens = new Map<string, Promise<WorkspaceContext>>();
+  private readonly pendingRestores = new Map<
+    string,
+    Promise<BetterResult<void, ManagedWorktreeFeatureError>>
+  >();
 
   constructor(
     private readonly config: ServerConfig,
@@ -214,7 +228,7 @@ export class WorkspaceRegistry {
       throw error;
     }
 
-    const workspace = this.getWorkspace(binding.workspaceSessionId);
+    const workspace = await this.getWorkspace(binding.workspaceSessionId);
     if (workspace.mode !== "checkout" || workspace.root !== root) return undefined;
     return workspace;
   }
@@ -242,21 +256,50 @@ export class WorkspaceRegistry {
     };
   }
 
-  getWorkspace(workspaceId: string): Workspace {
+  async getWorkspace(workspaceId: string): Promise<Workspace> {
     const workspace = this.workspaces.get(workspaceId);
     if (workspace) {
-      this.store?.touchSession(workspaceId);
-      return workspace;
+      if (!this.store) {
+        this.workspaces.delete(workspaceId);
+        this.workspaces.set(workspaceId, workspace);
+        return workspace;
+      }
+      const touched = this.store.touchSession(workspaceId);
+      if (touched.isErr()) throw touched.error;
+      if (touched.value) {
+        this.workspaces.delete(workspaceId);
+        this.workspaces.set(workspaceId, workspace);
+        return workspace;
+      }
+      this.workspaces.delete(workspaceId);
     }
 
-    const session = this.store?.getSession(workspaceId);
-    if (!session) {
-      throw new Error(
-        `Unknown workspaceId: ${workspaceId}. Open the target project or worktree again and continue with the new workspaceId.`,
-      );
+    let session: WorkspaceSession | undefined;
+    if (this.store) {
+      const sessionLookup = this.store.getSessionResult(workspaceId);
+      if (sessionLookup.isErr()) throw sessionLookup.error;
+      session = sessionLookup.value;
+    }
+    if (session?.status === "pruned") {
+      const restored = await this.ensurePrunedWorkspaceRestored(session);
+      if (restored.isErr()) throw restored.error;
+      if (this.store) {
+        const restoredLookup = this.store.getSessionResult(workspaceId);
+        if (restoredLookup.isErr()) throw restoredLookup.error;
+        session = restoredLookup.value;
+      }
+    }
+    if (!session || session.status !== "active") {
+      throw unavailableWorkspaceError(workspaceId);
     }
 
     const root = this.assertWorkspaceRootAllowed(session.root, session.mode, session.sourceRoot);
+    if (this.store) {
+      const touched = this.store.touchSession(workspaceId);
+      if (touched.isErr()) throw touched.error;
+      if (!touched.value) throw unavailableWorkspaceError(workspaceId);
+    }
+
     const restoredWorkspace: Workspace = {
       id: session.id,
       root,
@@ -275,12 +318,77 @@ export class WorkspaceRegistry {
           : undefined,
       ...this.loadSkillsForWorkspace(root),
       agentProfiles: [],
-      activatedSkillDirs: new Set(),
     };
-    this.store?.touchSession(workspaceId);
-    this.workspaces.set(restoredWorkspace.id, restoredWorkspace);
+    this.rememberWorkspace(restoredWorkspace);
 
     return restoredWorkspace;
+  }
+
+  private async ensurePrunedWorkspaceRestored(
+    session: WorkspaceSession,
+  ): Promise<BetterResult<void, ManagedWorktreeFeatureError>> {
+    const pending = this.pendingRestores.get(session.id);
+    if (pending) return pending;
+
+    const restore = this.restorePrunedWorkspace(session);
+    this.pendingRestores.set(session.id, restore);
+    try {
+      return await restore;
+    } finally {
+      if (this.pendingRestores.get(session.id) === restore) {
+        this.pendingRestores.delete(session.id);
+      }
+    }
+  }
+
+  private async restorePrunedWorkspace(
+    session: WorkspaceSession,
+  ): Promise<BetterResult<void, ManagedWorktreeFeatureError>> {
+    if (!this.store || session.mode !== "worktree" || !session.managed) {
+      return Result.err(new ManagedWorktreeError({
+        code: "WORKTREE_INVALID_STATE",
+        workspaceId: session.id,
+        operation: "reactivate",
+        message: unavailableWorkspaceError(session.id).message,
+      }));
+    }
+
+    const restored = await restoreManagedWorktree({
+      session,
+      worktreeRoot: this.config.worktreeRoot,
+      allowedRoots: this.config.allowedRoots,
+    });
+    if (restored.isErr()) return restored;
+
+    const reactivated = this.store.reactivateSession(session.id);
+    if (reactivated.isErr() || !reactivated.value) {
+      const discarded = await discardRestoredManagedWorktree({
+        session,
+        worktreeRoot: this.config.worktreeRoot,
+        allowedRoots: this.config.allowedRoots,
+      });
+      if (discarded.isErr()) {
+        return Result.err(new ManagedWorktreeError({
+          code: "WORKTREE_RESTORE_FAILED",
+          workspaceId: session.id,
+          operation: "reactivate",
+          message: `Restored workspace ${session.id}, but its persisted session could not be reactivated and the restored worktree could not be discarded.`,
+          cause: {
+            reactivate: reactivated.isErr() ? reactivated.error : undefined,
+            discard: discarded.error,
+          },
+        }));
+      }
+      if (reactivated.isErr()) return reactivated;
+      return Result.err(new ManagedWorktreeError({
+        code: "WORKTREE_RESTORE_FAILED",
+        workspaceId: session.id,
+        operation: "reactivate",
+        message: `Restored workspace ${session.id}, but its persisted session could not be reactivated.`,
+      }));
+    }
+
+    return Result.ok(undefined);
   }
 
   resolvePath(workspace: Workspace, inputPath: string): string {
@@ -301,7 +409,6 @@ export class WorkspaceRegistry {
     } catch (workspaceError) {
       const skillRead = resolveSkillReadPath(
         workspace.skills,
-        workspace.activatedSkillDirs,
         inputPath,
       );
       if (!skillRead) throw workspaceError;
@@ -311,12 +418,6 @@ export class WorkspaceRegistry {
         readRoots: [workspace.root, skillRead.skill.baseDir],
         skillRead,
       };
-    }
-  }
-
-  markReadPathLoaded(workspace: Workspace, readPath: WorkspaceReadPath): void {
-    if (readPath.skillRead?.isSkillFile) {
-      markSkillActivated(workspace.activatedSkillDirs, readPath.skillRead.skill);
     }
   }
 
@@ -364,7 +465,6 @@ export class WorkspaceRegistry {
       worktree: input.worktree,
       ...this.loadSkillsForWorkspace(input.root),
       agentProfiles: await loadLocalAgentProfiles(this.config, input.root),
-      activatedSkillDirs: new Set(),
     };
 
     this.store?.createSession({
@@ -376,7 +476,7 @@ export class WorkspaceRegistry {
       baseSha: workspace.worktree?.baseSha,
       managed: workspace.worktree?.managed,
     });
-    this.workspaces.set(workspace.id, workspace);
+    this.rememberWorkspace(workspace);
     const agentsFiles = await this.loadInitialAgentsFiles(workspace.root);
     const availableAgentsFiles = await this.findAvailableAgentsFiles(workspace.root, agentsFiles);
 
@@ -387,6 +487,18 @@ export class WorkspaceRegistry {
       workspaceReused: false,
       includeBootstrapContext: true,
     };
+  }
+
+  private rememberWorkspace(workspace: Workspace): void {
+    this.workspaces.delete(workspace.id);
+    this.workspaces.set(workspace.id, workspace);
+
+    if (!this.store) return;
+    while (this.workspaces.size > MAX_CACHED_WORKSPACES) {
+      const oldestWorkspaceId = this.workspaces.keys().next().value as string | undefined;
+      if (!oldestWorkspaceId) break;
+      this.workspaces.delete(oldestWorkspaceId);
+    }
   }
 
   private loadSkillsForWorkspace(root: string): Pick<Workspace, "skills" | "skillDiagnostics"> {
@@ -412,17 +524,17 @@ export class WorkspaceRegistry {
   private async loadInitialAgentsFiles(root: string): Promise<LoadedAgentsFile[]> {
     const agentDir = resolve(this.config.agentDir);
     const resolvedRoot = (await tryRealpath(root)) ?? root;
-    const resolvedAgentDir = (await tryRealpath(agentDir)) ?? agentDir;
     const loadedFiles: LoadedAgentsFile[] = [];
 
     for (const file of loadProjectContextFiles({ cwd: root, agentDir })) {
       const path = resolve(file.path);
-      if (!isInitialAgentsFilePath(path, root, agentDir)) continue;
+      const source = initialAgentsFileSource(path, root, agentDir);
+      if (!source) continue;
       const content = await readResolvedContextFile(
         path,
         file.content,
+        source,
         resolvedRoot,
-        resolvedAgentDir,
       );
       if (content === undefined) continue;
 
@@ -459,6 +571,12 @@ export class WorkspaceRegistry {
 
     return discovered.sort((a, b) => a.path.localeCompare(b.path));
   }
+}
+
+function unavailableWorkspaceError(workspaceId: string): Error {
+  return new Error(
+    `Unknown workspaceId: ${workspaceId}. Open the target project or worktree again and continue with the new workspaceId.`,
+  );
 }
 
 async function canonicalPath(path: string): Promise<string> {
@@ -527,20 +645,30 @@ export function formatAgentsPath(path: string, workspaceRoot: string | undefined
   return relationship.split(sep).join("/");
 }
 
-function isInitialAgentsFilePath(path: string, root: string, agentDir: string): boolean {
-  if (isPathInsideRoot(path, agentDir)) return true;
-  return isPathInsideRoot(path, root) && dirname(path) === root;
+function initialAgentsFileSource(
+  path: string,
+  root: string,
+  agentDir: string,
+): InitialAgentsFileSource | undefined {
+  if (isPathInsideRoot(path, agentDir)) return "global";
+  if (isPathInsideRoot(path, root) && dirname(path) === root) return "workspace";
+  return undefined;
 }
 
 async function readResolvedContextFile(
   path: string,
   fallbackContent: string,
+  source: InitialAgentsFileSource,
   root: string,
-  agentDir: string,
 ): Promise<string | undefined> {
   try {
     const resolvedPath = await realpath(path);
-    if (!isInitialAgentsFilePath(resolvedPath, root, agentDir)) return undefined;
+    if (
+      source === "workspace" &&
+      (!isPathInsideRoot(resolvedPath, root) || dirname(resolvedPath) !== root)
+    ) {
+      return undefined;
+    }
     return await readFile(resolvedPath, "utf8");
   } catch {
     return fallbackContent;

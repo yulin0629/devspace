@@ -83,7 +83,7 @@ interface ArtifactDestination {
 }
 
 export function registerArtifactTools(
-  server: McpServer,
+  server: Pick<McpServer, "registerTool">,
   {
     config,
     workspaces,
@@ -98,13 +98,13 @@ export function registerArtifactTools(
     {
       title: "Download attached or generated file",
       description:
-        "Stream one MCP-host-provided native file to a requested relative path inside a workspace. Existing destinations, arbitrary URLs, absolute paths, traversal, symlinked parents, source filesystem paths, and malformed file objects are rejected.",
+        "Save an attached or generated file to a relative path inside a workspace. The destination must not already exist.",
       inputSchema: {
         file: openAIFileReferenceInputSchema.describe(
-          "Native file value authorized and supplied by the MCP host.",
+          "Attached or generated file to save.",
         ),
-        workspaceId: z.string().min(1).describe(
-          "Workspace to use. Reuse the current project's workspaceId.",
+        workspace_id: z.string().min(1).describe(
+          "Workspace to use. Reuse the current project's workspace_id.",
         ),
         path: z.string().min(1).describe(
           "Relative destination path inside the selected workspace. The destination must not already exist.",
@@ -117,7 +117,7 @@ export function registerArtifactTools(
       annotations: ARTIFACT_WRITE_ANNOTATIONS,
     },
     async (input) => executeArtifactTool(config, input, async () => {
-      const workspace = workspaces.getWorkspace(input.workspaceId);
+      const workspace = await workspaces.getWorkspace(input.workspace_id);
       const downloaded = await downloadIncomingArtifact({
         registry: incomingRegistry,
         workspaceId: workspace.id,
@@ -292,7 +292,7 @@ export function artifactToolLogFields(
     fileProvided: input.file !== undefined,
     fileReferenceShape: describeIncomingArtifactValue(input.file),
     downloadUrlHostname: incomingFileDownloadHostname(input.file),
-    workspaceId: input.workspaceId,
+    workspaceId: input.workspace_id,
     path: input.path,
   };
 }
