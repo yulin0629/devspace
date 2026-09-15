@@ -1824,6 +1824,8 @@ export function createServer(
     const initializeRequest = req.method === "POST" && isInitializeRequest(req.body);
 
     await new Promise<void>((resolve, reject) => {
+      res.once("finish", resolve);
+      res.once("close", resolve);
       bearerAuth(req, res, (error?: unknown) => {
         if (error) reject(error);
         else resolve();
