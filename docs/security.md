@@ -6,7 +6,7 @@ to your development machine.
 The security model is simple:
 
 - you choose a narrow filesystem allowlist
-- the MCP endpoint requires OAuth approval with your Owner password
+- the MCP endpoint requires an approved OAuth token or the optional static bearer token
 - Host headers are allowlisted from the configured public URL
 - every coding action happens through explicit MCP tool calls
 
@@ -40,8 +40,13 @@ reach.
 ~/.devspace/auth.json
 ```
 
-When an MCP client connects, DevSpace shows an approval page. Enter the Owner
+When an MCP client connects through OAuth, DevSpace shows an approval page. Enter the Owner
 password only when you intentionally want that client to access this server.
+
+This fork also accepts an optional static bearer token configured in
+`~/.devspace/auth.json` or `DEVSPACE_STATIC_BEARER_TOKEN`. Possession of that token
+grants the MCP scope directly, without an Owner approval page. Keep it private;
+see [configuration](configuration.md#optional-static-bearer-token).
 
 For env-driven deployments, set a long random value:
 
@@ -74,7 +79,7 @@ http://127.0.0.1:7676
 ```
 
 Prefer adding Cloudflare Access, Tailscale identity controls, or equivalent
-protection in front of public tunnels. DevSpace OAuth still protects the MCP
+protection in front of public tunnels. DevSpace bearer authentication still protects the MCP
 endpoint, but the tunnel URL should not be treated as a secret.
 
 ## Shell Access
@@ -84,7 +89,7 @@ package scripts.
 
 Filesystem path containment applies to DevSpace file tools. Shell commands run
 as local commands and can do what your user account can do. This is why the MCP
-client must be trusted and the Owner password must stay private.
+client must be trusted and the Owner password and static bearer token must stay private.
 
 ## Worktrees
 
