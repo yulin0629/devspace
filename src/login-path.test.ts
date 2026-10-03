@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 import test from "node:test";
 import { createLoginPathResolver, mergePaths } from "./login-path.js";
 import { runShellTool } from "./pi-tools.js";
 
 test("PATH merge preserves order and removes duplicates", () => {
-  assert.equal(mergePaths("/user/bin:/usr/bin", "/usr/bin:/bin"), "/user/bin:/usr/bin:/bin");
+  assert.equal(mergePaths(["/user/bin", "/usr/bin"].join(delimiter), ["/usr/bin", "/bin"].join(delimiter)), ["/user/bin", "/usr/bin", "/bin"].join(delimiter));
 });
 
 test("login PATH is captured once despite profile chatter and injected into Bash", {

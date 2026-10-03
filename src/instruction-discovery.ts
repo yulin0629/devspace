@@ -22,11 +22,11 @@ export async function discoverInstructionPaths(root: string): Promise<{
   let limited = false;
   let directories = 0;
 
-  async function scanGit(directory: string): Promise<void> {
+  async function scanGit(directory: string): Promise<boolean> {
     try {
       const { stdout } = await execFileAsync("git", [
         "ls-files", "--cached", "--others", "--exclude-standard", "--deduplicate", "-z",
-      ], { cwd: directory, timeout: 5000, maxBuffer: 16 * 1024 * 1024 });
+      ], { cwd: directory, env: { ...process.env, LC_ALL: "C" }, timeout: 5000, maxBuffer: 16 * 1024 * 1024 });
       for (const file of stdout.split("\0")) {
         if (!NAMES.has(basename(file))) continue;
         const path = join(directory, file);
@@ -35,10 +35,14 @@ export async function discoverInstructionPaths(root: string): Promise<{
         if (parts.length - 1 > MAX_DEPTH) { limited = true; continue; }
         if ((await lstat(path).catch(() => undefined))?.isFile()) paths.add(path);
       }
-    } catch {
+    } catch (error) {
+      // A stray .git directory is not a repository and must not hide its parent.
+      if (error instanceof Error && "stderr" in error
+        && /not a git repository/i.test(String(error.stderr))) return false;
       // Do not fall back to an unfiltered walk when Git cannot apply its ignore rules.
       limited = true;
     }
+    return true;
   }
 
   async function walk(): Promise<void> {
@@ -48,8 +52,7 @@ export async function discoverInstructionPaths(root: string): Promise<{
       const { directory, depth } = pending[index]!;
       const entries = await readdir(directory, { withFileTypes: true }).catch(() => undefined);
       if (!entries) continue;
-      if (entries.some((entry) => entry.name === ".git")) {
-        await scanGit(directory);
+      if (entries.some((entry) => entry.name === ".git") && await scanGit(directory)) {
         continue;
       }
       for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {

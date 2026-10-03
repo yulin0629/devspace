@@ -64,3 +64,12 @@ test("directory budget keeps shallow instructions visible before a large subtree
   assert.equal(result.limited, true);
   assert.deepEqual(result.paths, [join(root, "z-project/AGENTS.md")]);
 });
+
+test("a stray .git directory does not suppress non-Git workspace discovery", async (t) => {
+  const root = await fixture(t);
+  await mkdir(join(root, ".git"));
+  await instruction(root, "src");
+  assert.deepEqual(await discoverInstructionPaths(root), {
+    paths: [join(root, "src/AGENTS.md")], limited: false,
+  });
+});
