@@ -1,0 +1,74 @@
+import { execFile } from "node:child_process";
+import { lstat, readdir } from "node:fs/promises";
+import { basename, join, relative, sep } from "node:path";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
+const NAMES = new Set(["AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"]);
+const SKIPPED = new Set(["node_modules", "dist", "build", "cache", "caches"]);
+const MAX_DEPTH = 8;
+const MAX_DIRECTORIES = 2000;
+
+function skipDirectory(name: string): boolean {
+  // Explicitly opening a hidden directory still works; only nested discovery skips it.
+  return name.startsWith(".") || SKIPPED.has(name.toLowerCase());
+}
+
+export async function discoverInstructionPaths(root: string): Promise<{
+  paths: string[];
+  limited: boolean;
+}> {
+  const paths = new Set<string>();
+  let limited = false;
+  let directories = 0;
+
+  async function scanGit(directory: string): Promise<void> {
+    try {
+      const { stdout } = await execFileAsync("git", [
+        "ls-files", "--cached", "--others", "--exclude-standard", "--deduplicate", "-z",
+      ], { cwd: directory, timeout: 5000, maxBuffer: 16 * 1024 * 1024 });
+      for (const file of stdout.split("\0")) {
+        if (!NAMES.has(basename(file))) continue;
+        const path = join(directory, file);
+        const parts = relative(root, path).split(sep);
+        if (parts.slice(0, -1).some(skipDirectory)) continue;
+        if (parts.length - 1 > MAX_DEPTH) { limited = true; continue; }
+        if ((await lstat(path).catch(() => undefined))?.isFile()) paths.add(path);
+      }
+    } catch {
+      // Do not fall back to an unfiltered walk when Git cannot apply its ignore rules.
+      limited = true;
+    }
+  }
+
+  async function walk(): Promise<void> {
+    const pending = [{ directory: root, depth: 0 }];
+    for (let index = 0; index < pending.length; index++) {
+      if (++directories > MAX_DIRECTORIES) { limited = true; break; }
+      const { directory, depth } = pending[index]!;
+      const entries = await readdir(directory, { withFileTypes: true }).catch(() => undefined);
+      if (!entries) continue;
+      if (entries.some((entry) => entry.name === ".git")) {
+        await scanGit(directory);
+        continue;
+      }
+      for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+        const path = join(directory, entry.name);
+        if (entry.isDirectory() && !skipDirectory(entry.name)) {
+          if (depth >= MAX_DEPTH || directories >= MAX_DIRECTORIES) { limited = true; continue; }
+          if (pending.length < 10000) pending.push({ directory: path, depth: depth + 1 });
+          else limited = true;
+        } else if (entry.isFile() && NAMES.has(entry.name)) {
+          paths.add(path);
+        }
+      }
+    }
+  }
+
+  const insideGit = await execFileAsync("git", ["rev-parse", "--is-inside-work-tree"], {
+    cwd: root, timeout: 2000,
+  }).then(({ stdout }) => stdout.trim() === "true", () => false);
+  if (insideGit) await scanGit(root);
+  else await walk();
+  return { paths: [...paths].sort((a, b) => a.localeCompare(b)), limited };
+}

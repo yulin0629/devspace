@@ -2,16 +2,41 @@
 
 This page collects the setup issues users are most likely to hit.
 
-## Opening A Large Home Workspace Is Slow
+## Opening A Large Workspace
 
 Adding `~` to `workspaces.allowedRoots` permits Home access, but
-`open_workspace` also recursively discovers nested `AGENTS.md` and `CLAUDE.md`
-files under the selected workspace. A large Home directory can make this
-discovery exceed the client's request timeout.
+`open_workspace` discovers nested `AGENTS.md` and `CLAUDE.md` files, skipping
+hidden child directories, `node_modules`, `dist`, `build`, and directories named
+`cache` or `caches` (case-insensitive). Hidden child directories commonly contain
+harness history, plugin caches, worktrees, and trash. They remain accessible
+when explicitly opened as a workspace; this discovery filter does not change
+the filesystem allowlist or initial root/global instruction loading.
+
+Within Git repositories, discovery uses Git's tracked and non-ignored untracked
+files, including nested `.gitignore` rules. This also applies to repositories
+encountered while scanning a non-Git parent such as Home. Tracked files remain
+visible even if a later ignore rule matches them. Directory symlinks are not
+followed. Discovery is limited to eight nested directory levels and 2,000
+walked directories; bounded Git queries fail closed with a scan-limit notice.
+
+The nested instruction and skill catalogs show at most 50 entries, including
+structured output and card metadata, with omitted counts in the response.
+Skill descriptions are shortened to 160 characters when the catalog exceeds
+50 entries. A scan-limit notice means the instruction count covers only the
+scanned portion. Use the shell to inspect omitted files or skill directories.
 
 Open the actual project or harness subdirectory as the workspace while keeping
 Home in the allowlist. This reduces the discovery scope without changing the
 configured access boundary.
+
+## User Commands Missing From Bash PATH
+
+DevSpace probes the user's login shell once per server process to obtain PATH,
+then merges it with the inherited tool PATH using Pi's Bash spawn hook. The
+login shell comes from `SHELL`, or the operating system's user account record.
+Only PATH is imported; commands still execute with Bash syntax. The probe has
+a two-second timeout and retains the inherited PATH on errors or malformed
+output. Restart DevSpace after changing login PATH configuration.
 
 ## `devspace` Command Not Found
 

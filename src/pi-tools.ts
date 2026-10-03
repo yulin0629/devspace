@@ -10,6 +10,7 @@ import {
   type WriteToolInput,
   type AgentToolResult,
 } from "@earendil-works/pi-coding-agent";
+import { mergePaths, resolveLoginPath } from "./login-path.js";
 
 type McpContent = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
 export type ToolResponse<TDetails = unknown> = {
@@ -86,7 +87,13 @@ export async function editFileTool(input: EditToolInput, context: ToolContext): 
 }
 
 export async function runShellTool(input: BashToolInput, context: ToolContext): Promise<ToolResponse> {
-  const tool = createBashTool(context.cwd);
+  const loginPath = resolveLoginPath();
+  const tool = createBashTool(context.cwd, {
+    spawnHook: (spawn) => ({
+      ...spawn,
+      env: { ...spawn.env, PATH: mergePaths(loginPath, spawn.env.PATH) },
+    }),
+  });
   const timeout = input.timeout === undefined ? 30 : Math.min(input.timeout, 300);
 
   return runTool((params) => tool.execute("run_shell", params), {

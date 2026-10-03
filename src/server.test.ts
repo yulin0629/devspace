@@ -383,6 +383,29 @@ test("open_workspace keeps lifecycle flags out of model output and preserves com
   assert.ok(Array.isArray(card.agents));
 });
 
+test("open_workspace bounds nested instructions and skills in text, structured output and cards", async (t) => {
+  const context = await fixture(t);
+  for (let index = 0; index < 61; index++) {
+    const nested = join(context.project, `nested-${String(index).padStart(2, "0")}`);
+    const skill = join(context.project, ".agents", "skills", `sample-${index}`);
+    await mkdir(nested, { recursive: true });
+    await mkdir(skill, { recursive: true });
+    await writeFile(join(nested, "AGENTS.md"), "nested instructions\n");
+    await writeFile(join(skill, "SKILL.md"), `---\nname: sample-${index}\ndescription: ${"description ".repeat(100)}\n---\nInstructions.\n`);
+  }
+  const result = await callOpen(context.client, context.project);
+  const structured = structuredContent(result);
+  const card = responseCard(result);
+  assert.equal((structured.available_agents_files as unknown[]).length, 50);
+  assert.equal((structured.skills as unknown[]).length, 50);
+  assert.equal((card.availableAgentsFiles as unknown[]).length, 50);
+  assert.equal((card.skills as unknown[]).length, 50);
+  assert.match(structured.instruction as string, /11 more nested instruction files omitted/);
+  assert.match(JSON.stringify(result.content), /\d+ more skills omitted/);
+  assert.ok((structured.skills as Array<{ description: string }>).every((skill) => skill.description.length <= 160));
+  assert.ok(JSON.stringify(result).length < 80000);
+});
+
 test("open_workspace refreshes provider availability for each catalog", async (t) => {
   let available = false;
   const context = await fixture(t, {

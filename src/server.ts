@@ -32,6 +32,7 @@ import {
   requestPath,
 } from "./logger.js";
 import { readFileTool } from "./pi-tools.js";
+import { resolveLoginPath } from "./login-path.js";
 import { SingleUserOAuthProvider } from "./oauth-provider.js";
 import {
   compileMcpRegistrationSurface,
@@ -74,6 +75,7 @@ import {
 } from "./tool-surfaces/types.js";
 
 const WORKSPACE_APP_MANIFEST_ENTRY = "workspace-app.html";
+const MAX_CONTEXT_ITEMS = 50;
 
 function mcpServerInfo() {
   return {
@@ -445,6 +447,7 @@ function registerMcpSurface(
         workspace,
         agentsFiles,
         availableAgentsFiles,
+        instructionDiscoveryLimited,
         workspaceReused,
         includeBootstrapContext,
       } = await workspaces.openWorkspace(
@@ -461,9 +464,10 @@ function registerMcpSurface(
       const preloadedSubagentInstructions = preloadSubagents && subagentsSkill
         ? readFileSync(subagentsSkill.filePath, "utf8")
         : undefined;
-      const cardSkills = workspace.skills
+      const allCardSkills = workspace.skills
         .filter((skill) => !skill.disableModelInvocation)
         .filter((skill) => !(preloadSubagents && skill.name === "subagents"))
+        .sort((a, b) => Number(b.name === "subagents") - Number(a.name === "subagents"))
         .map((skill) => ({
           name: skill.name,
           description: skill.description,
@@ -487,7 +491,13 @@ function registerMcpSurface(
         path: formatAgentsPath(file.path, workspace.root),
         content: file.content,
       }));
-      const cardAvailableAgentsFiles = availableAgentsFiles.map((file) => ({
+      const cardSkills = allCardSkills.slice(0, MAX_CONTEXT_ITEMS).map((skill) => ({
+        ...skill,
+        description: allCardSkills.length > MAX_CONTEXT_ITEMS
+          ? skill.description.slice(0, 160)
+          : skill.description,
+      }));
+      const cardAvailableAgentsFiles = availableAgentsFiles.slice(0, MAX_CONTEXT_ITEMS).map((file) => ({
         path: formatAgentsPath(file.path, workspace.root),
       }));
       const visibleSkills = includeBootstrapContext ? cardSkills : [];
@@ -495,6 +505,19 @@ function registerMcpSurface(
       const visibleAgents = includeBootstrapContext ? cardAgents : [];
       const loadedAgentsFiles = includeBootstrapContext ? cardAgentsFiles : [];
       const availableAgentsFileOutputs = includeBootstrapContext ? cardAvailableAgentsFiles : [];
+      const omittedInstructions = includeBootstrapContext
+        ? Math.max(0, availableAgentsFiles.length - MAX_CONTEXT_ITEMS) : 0;
+      const omittedSkills = includeBootstrapContext
+        ? Math.max(0, allCardSkills.length - MAX_CONTEXT_ITEMS) : 0;
+      const contextSummary = [
+        omittedInstructions ? `${omittedInstructions} more nested instruction files omitted.` : undefined,
+        omittedSkills ? `${omittedSkills} more skills omitted.` : undefined,
+        includeBootstrapContext && instructionDiscoveryLimited
+          ? "Instruction discovery limited by depth, directory, or Git scan limits." : undefined,
+      ].filter(Boolean).join(" ");
+      const discoveryAdvice = contextSummary
+        ? `${contextSummary} Open the relevant subdirectory for a focused catalog; use the shell to inspect instruction or skill files not listed here.`
+        : undefined;
       const cardInstruction = config.skillsEnabled
         ? "Use this workspace_id for subsequent work in this project. Keep reusing it while working in this project. Follow loaded agents_files instructions. Before working under a path listed in available_agents_files, read that instruction file. When a task matches an available skill in skills, read its path before proceeding."
         : "Use this workspace_id for subsequent work in this project. Keep reusing it while working in this project. Follow loaded agents_files instructions. Before working under a path listed in available_agents_files, read that instruction file.";
@@ -534,6 +557,7 @@ function registerMcpSurface(
             visibleSkills.length > 0
               ? `Available skills: ${visibleSkills.map((skill) => skill.name).join(", ")}`
               : undefined,
+            discoveryAdvice,
             visibleAgentProviders.length > 0
               ? `Available subagent providers: ${visibleAgentProviders.map(formatAvailableAgentProvider).join(", ")}`
               : undefined,
@@ -574,8 +598,8 @@ function registerMcpSurface(
             summary: {
               mode: workspace.mode,
               agentsFiles: cardAgentsFiles.length,
-              availableAgentsFiles: cardAvailableAgentsFiles.length,
-              skills: cardSkills.length,
+              availableAgentsFiles: availableAgentsFiles.length,
+              skills: allCardSkills.length,
               agentProviders: cardAgentProviders.length,
               agents: cardAgents.length,
             },
@@ -604,10 +628,10 @@ function registerMcpSurface(
                 skills: visibleSkills,
                 agent_providers: visibleAgentProviders,
                 agents: visibleAgents,
-                skill_diagnostics: workspace.skillDiagnostics,
+                skill_diagnostics: workspace.skillDiagnostics.slice(0, MAX_CONTEXT_ITEMS),
               }
             : {}),
-          instruction,
+          instruction: discoveryAdvice ? `${instruction}\n${discoveryAdvice}` : instruction,
         },
       };
     },
@@ -797,6 +821,7 @@ export function createServer(
   config = loadConfig(),
   options: CreateServerOptions = {},
 ): RunningServer {
+  resolveLoginPath();
   const incomingArtifactAdapters = options.incomingArtifactAdapters
     ?? [createOpenAIIncomingArtifactAdapter()];
   const allowedHosts = config.allowedHosts.includes("*")
