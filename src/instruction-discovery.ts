@@ -1,11 +1,14 @@
 import { execFile } from "node:child_process";
 import { lstat, readdir } from "node:fs/promises";
-import { basename, join, relative, sep } from "node:path";
+import { homedir } from "node:os";
+import { basename, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 const NAMES = new Set(["AGENTS.md", "AGENTS.MD", "CLAUDE.md", "CLAUDE.MD"]);
 const SKIPPED = new Set(["node_modules", "dist", "build", "cache", "caches"]);
+// Automatic Home discovery must not prompt a background service for macOS privacy access.
+const MAC_HOME_SKIPPED = new Set(["desktop", "documents", "downloads", "library", "movies", "music", "pictures"]);
 const MAX_DEPTH = 8;
 const MAX_DIRECTORIES = 2000;
 
@@ -14,10 +17,17 @@ function skipDirectory(name: string): boolean {
   return name.startsWith(".") || SKIPPED.has(name.toLowerCase());
 }
 
-export async function discoverInstructionPaths(root: string): Promise<{
+export async function discoverInstructionPaths(
+  root: string,
+  environment: { platform?: NodeJS.Platform; homeDir?: string } = {},
+): Promise<{
   paths: string[];
   limited: boolean;
 }> {
+  const macHome = (environment.platform ?? process.platform) === "darwin"
+    && resolve(root) === resolve(environment.homeDir ?? homedir());
+  const skipChild = (name: string, depth: number) => skipDirectory(name)
+    || (macHome && depth === 0 && MAC_HOME_SKIPPED.has(name.toLowerCase()));
   const paths = new Set<string>();
   let limited = false;
   let directories = 0;
@@ -31,7 +41,7 @@ export async function discoverInstructionPaths(root: string): Promise<{
         if (!NAMES.has(basename(file))) continue;
         const path = join(directory, file);
         const parts = relative(root, path).split(sep);
-        if (parts.slice(0, -1).some(skipDirectory)) continue;
+        if (parts.slice(0, -1).some((part, depth) => skipChild(part, depth))) continue;
         if (parts.length - 1 > MAX_DEPTH) { limited = true; continue; }
         if ((await lstat(path).catch(() => undefined))?.isFile()) paths.add(path);
       }
@@ -57,7 +67,7 @@ export async function discoverInstructionPaths(root: string): Promise<{
       }
       for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
         const path = join(directory, entry.name);
-        if (entry.isDirectory() && !skipDirectory(entry.name)) {
+        if (entry.isDirectory() && !skipChild(entry.name, depth)) {
           if (depth >= MAX_DEPTH || directories >= MAX_DIRECTORIES) { limited = true; continue; }
           if (pending.length < 10000) pending.push({ directory: path, depth: depth + 1 });
           else limited = true;

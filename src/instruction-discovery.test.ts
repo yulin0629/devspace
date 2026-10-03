@@ -73,3 +73,24 @@ test("a stray .git directory does not suppress non-Git workspace discovery", asy
     paths: [join(root, "src/AGENTS.md")], limited: false,
   });
 });
+
+
+test("macOS Home discovery skips privacy-protected children without filtering explicit projects", async (t) => {
+  const root = await fixture(t);
+  for (const dir of ["Desktop", "Documents", "Downloads", "Library", "Movies", "Music", "Pictures", "github/project"]) {
+    await instruction(root, dir);
+  }
+  const environment = { platform: "darwin" as const, homeDir: root };
+  assert.deepEqual((await discoverInstructionPaths(root, environment)).paths, [join(root, "github/project/AGENTS.md")]);
+  assert.deepEqual((await discoverInstructionPaths(join(root, "Desktop"), environment)).paths, [join(root, "Desktop/AGENTS.md")]);
+  assert.deepEqual((await discoverInstructionPaths(root, { ...environment, homeDir: join(root, "another-home") })).paths.length, 8);
+  assert.deepEqual((await discoverInstructionPaths(root, { ...environment, platform: "linux" })).paths.length, 8);
+});
+
+test("Git discovery in macOS Home uses the same privacy boundary", async (t) => {
+  const root = await fixture(t);
+  execFileSync("git", ["init", "-q"], { cwd: root });
+  await instruction(root, "Desktop");
+  await instruction(root, "github/project");
+  assert.deepEqual((await discoverInstructionPaths(root, { platform: "darwin", homeDir: root })).paths, [join(root, "github/project/AGENTS.md")]);
+});

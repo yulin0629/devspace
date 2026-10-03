@@ -12,6 +12,14 @@ harness history, plugin caches, worktrees, and trash. They remain accessible
 when explicitly opened as a workspace; this discovery filter does not change
 the filesystem allowlist or initial root/global instruction loading.
 
+On macOS, automatically scanning Home also skips its standard Desktop,
+Documents, Downloads, Library, Movies, Music, and Pictures children. Directory
+reads there can wait for a TCC privacy prompt when DevSpace runs under launchd,
+even if an SSH-launched preview can read them. These exclusions apply only to
+Home discovery, including a Git repository rooted at Home. An explicitly
+opened directory or a normal project containing those names is still scanned;
+filesystem operations remain subject to macOS permissions.
+
 Within Git repositories, discovery uses Git's tracked and non-ignored untracked
 files, including nested `.gitignore` rules. This also applies to repositories
 encountered while scanning a non-Git parent such as Home. Tracked files remain
