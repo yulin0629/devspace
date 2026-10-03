@@ -47,6 +47,22 @@ export async function discoverInstructionPaths(
         const stats = await fs.lstat(path).catch(() => undefined);
         if (stats?.isFile() && (homeDevice === undefined || stats.dev === homeDevice)) paths.add(path);
       }
+      // Git's parent index lists submodules as gitlinks, not their instruction files.
+      const { stdout: staged } = await execFileAsync("git", ["ls-files", "--stage", "-z"], {
+        cwd: directory, env: { ...process.env, LC_ALL: "C" }, timeout: 5000, maxBuffer: 16 * 1024 * 1024,
+      });
+      for (const entry of staged.split("\0")) {
+        if (!entry.startsWith("160000 ")) continue;
+        const path = join(directory, entry.slice(entry.indexOf("\t") + 1));
+        const parts = relative(root, path).split(sep);
+        if (parts.some((part, depth) => skipChild(part, depth))) continue;
+        if (parts.length > MAX_DEPTH || ++directories > MAX_DIRECTORIES) { limited = true; continue; }
+        const stats = await fs.lstat(path).catch(() => undefined);
+        if (!stats?.isDirectory() || (homeDevice !== undefined && stats.dev !== homeDevice)) continue;
+        // Uninitialized submodules inherit the parent's repository: do not recurse into those.
+        if (!(await fs.lstat(join(path, ".git")).catch(() => undefined))) continue;
+        await scanGit(path);
+      }
     } catch (error) {
       // A stray .git directory is not a repository and must not hide its parent.
       if (error instanceof Error && "stderr" in error

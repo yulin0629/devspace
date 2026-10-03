@@ -55,6 +55,31 @@ test("discovery reports depth limits and does not follow directory symlinks", as
   assert.deepEqual(result.paths, [join(root, "visible/AGENTS.md")]);
 });
 
+test("Git discovery includes initialized submodules while respecting their ignores and skipped paths", async (t) => {
+  const parent = await fixture(t);
+  const source = join(parent, "source");
+  const root = join(parent, "repo");
+  await mkdir(source);
+  await mkdir(root);
+  const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, stdio: "pipe" });
+  git(source, "init", "-q");
+  await instruction(source, "src");
+  await instruction(source, "cache");
+  await writeFile(join(source, ".gitignore"), "ignored/\n");
+  git(source, "add", ".");
+  git(source, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "fixture");
+  git(root, "init", "-q");
+  for (const name of ["module", ".hidden-module", "cache/module", "uninitialized"]) {
+    git(root, "-c", "protocol.file.allow=always", "submodule", "add", "-q", source, name);
+  }
+  git(root, "-c", "user.name=Test", "-c", "user.email=test@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qam", "fixture");
+  git(root, "submodule", "deinit", "-f", "uninitialized");
+  await instruction(root, "module/ignored");
+  await instruction(root, "module/untracked");
+  assert.deepEqual((await discoverInstructionPaths(root)).paths, [join(root, "module/src/AGENTS.md"), join(root, "module/untracked/AGENTS.md")]);
+  assert.deepEqual((await discoverInstructionPaths(join(root, "module"))).paths, [join(root, "module/src/AGENTS.md"), join(root, "module/untracked/AGENTS.md")]);
+});
+
 test("directory budget keeps shallow instructions visible before a large subtree", async (t) => {
   const root = await fixture(t);
   await mkdir(join(root, "a-large"));

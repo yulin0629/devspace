@@ -25,7 +25,9 @@ service. Opening a mounted directory explicitly retains normal discovery.
 
 Within Git repositories, discovery uses Git's tracked and non-ignored untracked
 files, including nested `.gitignore` rules. This also applies to repositories
-encountered while scanning a non-Git parent such as Home. Tracked files remain
+encountered while scanning a non-Git parent such as Home. Initialized Git
+submodules are scanned using their own ignore rules and the same discovery
+bounds. Tracked files remain
 visible even if a later ignore rule matches them. Directory symlinks are not
 followed. Discovery is limited to eight nested directory levels and 2,000
 walked directories; bounded Git queries fail closed with a scan-limit notice.
