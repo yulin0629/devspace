@@ -2,6 +2,17 @@
 
 This page collects the setup issues users are most likely to hit.
 
+## Opening A Large Home Workspace Is Slow
+
+Adding `~` to `workspaces.allowedRoots` permits Home access, but
+`open_workspace` also recursively discovers nested `AGENTS.md` and `CLAUDE.md`
+files under the selected workspace. A large Home directory can make this
+discovery exceed the client's request timeout.
+
+Open the actual project or harness subdirectory as the workspace while keeping
+Home in the allowlist. This reduces the discovery scope without changing the
+configured access boundary.
+
 ## `devspace` Command Not Found
 
 Use `npx`:
