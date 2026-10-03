@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import fs, { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
@@ -92,5 +92,41 @@ test("Git discovery in macOS Home uses the same privacy boundary", async (t) => 
   execFileSync("git", ["init", "-q"], { cwd: root });
   await instruction(root, "Desktop");
   await instruction(root, "github/project");
+  assert.deepEqual((await discoverInstructionPaths(root, { platform: "darwin", homeDir: root })).paths, [join(root, "github/project/AGENTS.md")]);
+});
+
+
+test("macOS Home discovery skips other filesystems but explicit mounts and ordinary projects remain visible", async (t) => {
+  const root = await fixture(t);
+  await instruction(root, "mounted/project");
+  await instruction(root, "github/project");
+  const realStat = fs.stat;
+  const realLstat = fs.lstat;
+  const mounted = join(root, "mounted");
+  const differentDevice = (path: Parameters<typeof fs.lstat>[0], stats: Awaited<ReturnType<typeof realLstat>>) => {
+    if (String(path) === mounted || String(path).startsWith(mounted + "/")) {
+      return Object.assign(Object.create(Object.getPrototypeOf(stats)), stats, { dev: Number(stats.dev) + 1 });
+    }
+    return stats;
+  };
+  t.mock.method(fs, "stat", async (path: Parameters<typeof fs.stat>[0]) => differentDevice(path, await realStat(path)));
+  t.mock.method(fs, "lstat", async (path: Parameters<typeof fs.lstat>[0]) => differentDevice(path, await realLstat(path)));
+  const environment = { platform: "darwin" as const, homeDir: root };
+  assert.deepEqual((await discoverInstructionPaths(root, environment)).paths, [join(root, "github/project/AGENTS.md")]);
+  assert.deepEqual((await discoverInstructionPaths(mounted, environment)).paths, [join(mounted, "project/AGENTS.md")]);
+  assert.equal((await discoverInstructionPaths(root, { ...environment, platform: "linux" })).paths.length, 2);
+});
+
+test("Git discovery in macOS Home also excludes files on other filesystems", async (t) => {
+  const root = await fixture(t);
+  execFileSync("git", ["init", "-q"], { cwd: root });
+  await instruction(root, "mounted");
+  await instruction(root, "github/project");
+  const realLstat = fs.lstat;
+  t.mock.method(fs, "lstat", async (path: Parameters<typeof fs.lstat>[0]) => {
+    const stats = await realLstat(path);
+    return String(path).includes("/mounted/")
+      ? Object.assign(Object.create(Object.getPrototypeOf(stats)), stats, { dev: Number(stats.dev) + 1 }) : stats;
+  });
   assert.deepEqual((await discoverInstructionPaths(root, { platform: "darwin", homeDir: root })).paths, [join(root, "github/project/AGENTS.md")]);
 });

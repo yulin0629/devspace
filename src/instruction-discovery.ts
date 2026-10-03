@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { lstat, readdir } from "node:fs/promises";
+import fs from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
@@ -26,6 +26,7 @@ export async function discoverInstructionPaths(
 }> {
   const macHome = (environment.platform ?? process.platform) === "darwin"
     && resolve(root) === resolve(environment.homeDir ?? homedir());
+  const homeDevice = macHome ? (await fs.stat(root).catch(() => undefined))?.dev : undefined;
   const skipChild = (name: string, depth: number) => skipDirectory(name)
     || (macHome && depth === 0 && MAC_HOME_SKIPPED.has(name.toLowerCase()));
   const paths = new Set<string>();
@@ -43,7 +44,8 @@ export async function discoverInstructionPaths(
         const parts = relative(root, path).split(sep);
         if (parts.slice(0, -1).some((part, depth) => skipChild(part, depth))) continue;
         if (parts.length - 1 > MAX_DEPTH) { limited = true; continue; }
-        if ((await lstat(path).catch(() => undefined))?.isFile()) paths.add(path);
+        const stats = await fs.lstat(path).catch(() => undefined);
+        if (stats?.isFile() && (homeDevice === undefined || stats.dev === homeDevice)) paths.add(path);
       }
     } catch (error) {
       // A stray .git directory is not a repository and must not hide its parent.
@@ -60,7 +62,10 @@ export async function discoverInstructionPaths(
     for (let index = 0; index < pending.length; index++) {
       if (++directories > MAX_DIRECTORIES) { limited = true; break; }
       const { directory, depth } = pending[index]!;
-      const entries = await readdir(directory, { withFileTypes: true }).catch(() => undefined);
+      // Home catalogs stay on their filesystem; opening a mount explicitly still scans it.
+      if (homeDevice !== undefined && directory !== root
+        && (await fs.lstat(directory).catch(() => undefined))?.dev !== homeDevice) continue;
+      const entries = await fs.readdir(directory, { withFileTypes: true }).catch(() => undefined);
       if (!entries) continue;
       if (entries.some((entry) => entry.name === ".git") && await scanGit(directory)) {
         continue;

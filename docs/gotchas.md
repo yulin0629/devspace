@@ -18,7 +18,10 @@ reads there can wait for a TCC privacy prompt when DevSpace runs under launchd,
 even if an SSH-launched preview can read them. These exclusions apply only to
 Home discovery, including a Git repository rooted at Home. An explicitly
 opened directory or a normal project containing those names is still scanned;
-filesystem operations remain subject to macOS permissions.
+filesystem operations remain subject to macOS permissions. Automatic macOS
+Home discovery also stays on Home's filesystem rather than descending into
+NFS or other mounted volumes, whose directory reads can block a background
+service. Opening a mounted directory explicitly retains normal discovery.
 
 Within Git repositories, discovery uses Git's tracked and non-ignored untracked
 files, including nested `.gitignore` rules. This also applies to repositories
