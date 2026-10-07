@@ -16,8 +16,9 @@ export function decodeToolResult(result: CallToolResult): DecodedToolResult {
   const metaCard = cardFields(asRecord(asRecord(result._meta)?.card));
 
   if (structured) {
-    const workspaceId = stringField(structured.workspace_id);
-    const reviewRef = stringField(structured.review_ref);
+    // Results stored before the snake_case contract (pre-2026-09) still arrive camelCase on replay.
+    const workspaceId = stringField(structured.workspace_id) ?? stringField(structured.workspaceId);
+    const reviewRef = stringField(structured.review_ref) ?? stringField(structured.reviewRef);
     if (workspaceId && reviewRef) {
       if (isCompleteReviewCard(metaCard)) {
         return {
@@ -45,7 +46,9 @@ export function decodeToolResult(result: CallToolResult): DecodedToolResult {
     const root = stringField(structured.root);
     const mode = workspaceMode(structured.mode);
     if (workspaceId && root && mode) {
-      const structuredCard = structuredWorkspaceCardFields(structured) ?? {};
+      const structuredCard = (structured.workspaceId !== undefined
+        ? cardFields(structured)
+        : structuredWorkspaceCardFields(structured)) ?? {};
       return {
         kind: "card",
         card: {

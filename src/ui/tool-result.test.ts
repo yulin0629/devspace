@@ -153,3 +153,36 @@ test("ChatGPT globals also accept result metadata exposed directly", () => {
     },
   });
 });
+
+test("pre-snake_case workspace results still render when replayed without metadata", () => {
+  const decoded = decodeToolResult({
+    content: [],
+    structuredContent: {
+      workspaceId: "ws_old",
+      root: "/tmp/project",
+      mode: "worktree",
+      skills: [{ name: "tdd", description: "Tests first", path: "/tmp/tdd/SKILL.md" }],
+      agentsFiles: [{ path: "AGENTS.md", content: "instructions" }],
+    },
+  } as CallToolResult);
+
+  assert.equal(decoded.kind, "card");
+  if (decoded.kind !== "card") return;
+  assert.equal(decoded.card.tool, "open_workspace");
+  assert.equal(decoded.card.workspaceId, "ws_old");
+  assert.equal(decoded.card.summary?.skills, 1);
+  assert.equal(decoded.card.summary?.agentsFiles, 1);
+});
+
+test("pre-snake_case review results become a reload reference", () => {
+  const decoded = decodeToolResult({
+    content: [],
+    structuredContent: { workspaceId: "ws_old", reviewRef: "b".repeat(40) },
+  } as CallToolResult);
+
+  assert.deepEqual(decoded, {
+    kind: "review-reference",
+    workspaceId: "ws_old",
+    reviewRef: "b".repeat(40),
+  });
+});

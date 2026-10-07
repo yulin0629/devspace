@@ -503,12 +503,12 @@ test("open_workspace bounds nested instructions and skills in text, structured o
   const structured = structuredContent(result);
   const card = responseCard(result);
   assert.equal((structured.available_agents_files as unknown[]).length, 20);
-  assert.equal((structured.skills as unknown[]).length, 50);
+  assert.equal((structured.skills as unknown[]).length, 20);
   assert.equal((card.availableAgentsFiles as unknown[]).length, 50);
   assert.equal((card.skills as unknown[]).length, 50);
   assert.match(structured.instruction as string, /41 more nested instruction files omitted/);
   assert.match(JSON.stringify(result.content), /\d+ more skills omitted/);
-  assert.ok((structured.skills as Array<{ description: string }>).every((skill) => skill.description.length <= 160));
+  assert.ok((structured.skills as Array<{ description: string }>).every((skill) => skill.description.length <= 80));
   assert.ok(JSON.stringify(result).length < 80000);
 });
 

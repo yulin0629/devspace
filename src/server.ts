@@ -45,6 +45,7 @@ import { createReviewCheckpointManager } from "./review-checkpoints.js";
 import { conversationScopeIdFromRequestMeta } from "./request-meta.js";
 import { shutdownHttpServer } from "./server-shutdown.js";
 import { formatPathForPrompt, formatSkillUri } from "./skills.js";
+import { isPathInsideRoot } from "./roots.js";
 import { DEVSPACE_VERSION } from "./version.js";
 import { createWorkspaceStore } from "./workspace-store.js";
 import { formatAgentsPath, WorkspaceRegistry } from "./workspaces.js";
@@ -78,6 +79,10 @@ const WORKSPACE_APP_MANIFEST_ENTRY = "workspace-app.html";
 const MAX_CONTEXT_ITEMS = 50;
 // Nested instruction paths are only pointers; the model can open a subdirectory for a focused catalog.
 const MAX_MODEL_NESTED_INSTRUCTIONS = 20;
+// Skills are also pointers; the card keeps the wider catalog, the model gets a short, workspace-first list.
+const MAX_MODEL_SKILLS = 20;
+const MAX_MODEL_SKILL_DESCRIPTION = 80;
+const MAX_CARD_SKILL_DESCRIPTION = 160;
 
 function mcpServerInfo() {
   return {
@@ -482,7 +487,15 @@ function registerMcpSurface(
       const allCardSkills = workspace.skills
         .filter((skill) => !skill.disableModelInvocation)
         .filter((skill) => !(preloadSubagents && skill.name === "subagents"))
-        .sort((a, b) => Number(b.name === "subagents") - Number(a.name === "subagents"))
+        .map((skill, index) => ({
+          skill,
+          index,
+          rank: skill.name === "subagents"
+            ? 0
+            : isPathInsideRoot(skill.filePath, workspace.root) ? 1 : 2,
+        }))
+        .sort((a, b) => a.rank - b.rank || a.index - b.index)
+        .map(({ skill }) => skill)
         .map((skill) => ({
           name: skill.name,
           description: skill.description,
@@ -511,13 +524,19 @@ function registerMcpSurface(
       const cardSkills = allCardSkills.slice(0, MAX_CONTEXT_ITEMS).map((skill) => ({
         ...skill,
         description: allCardSkills.length > MAX_CONTEXT_ITEMS
-          ? skill.description.slice(0, 160)
+          ? skill.description.slice(0, MAX_CARD_SKILL_DESCRIPTION)
+          : skill.description,
+      }));
+      const modelSkills = cardSkills.slice(0, MAX_MODEL_SKILLS).map((skill) => ({
+        ...skill,
+        description: skill.description.length > MAX_MODEL_SKILL_DESCRIPTION
+          ? `${skill.description.slice(0, MAX_MODEL_SKILL_DESCRIPTION - 1)}…`
           : skill.description,
       }));
       const cardAvailableAgentsFiles = availableAgentsFiles.slice(0, MAX_CONTEXT_ITEMS).map((file) => ({
         path: formatAgentsPath(file.path, workspace.root),
       }));
-      const visibleSkills = includeBootstrapContext ? cardSkills : [];
+      const visibleSkills = includeBootstrapContext ? modelSkills : [];
       const visibleAgentProviders = includeBootstrapContext
         ? cardAgentProviders.map(({ note: _note, ...provider }) => provider)
         : [];
@@ -529,7 +548,7 @@ function registerMcpSurface(
       const omittedInstructions = includeBootstrapContext
         ? Math.max(0, availableAgentsFiles.length - MAX_MODEL_NESTED_INSTRUCTIONS) : 0;
       const omittedSkills = includeBootstrapContext
-        ? Math.max(0, allCardSkills.length - MAX_CONTEXT_ITEMS) : 0;
+        ? Math.max(0, allCardSkills.length - MAX_MODEL_SKILLS) : 0;
       const contextSummary = [
         omittedInstructions ? `${omittedInstructions} more nested instruction files omitted.` : undefined,
         omittedSkills ? `${omittedSkills} more skills omitted.` : undefined,
