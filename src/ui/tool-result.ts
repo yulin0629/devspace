@@ -4,6 +4,9 @@ import type { ReviewFileType, ToolResultCard } from "./card-types.js";
 export type DecodedToolResult =
   | { kind: "card"; card: ToolResultCard }
   | { kind: "review-reference"; workspaceId: string; reviewRef: string }
+  // A tool without a card (bash, read, ...). Hosts holding a stale tool list may still
+  // mount the widget for these; the widget should then stay out of the way.
+  | { kind: "plain" }
   | { kind: "invalid" };
 
 export interface ChatGptToolGlobals {
@@ -16,8 +19,9 @@ export function decodeToolResult(result: CallToolResult): DecodedToolResult {
   const metaCard = cardFields(asRecord(asRecord(result._meta)?.card));
 
   if (structured) {
-    const workspaceId = stringField(structured.workspace_id);
-    const reviewRef = stringField(structured.review_ref);
+    // Results stored before the snake_case contract (pre-2026-09) still arrive camelCase on replay.
+    const workspaceId = stringField(structured.workspace_id) ?? stringField(structured.workspaceId);
+    const reviewRef = stringField(structured.review_ref) ?? stringField(structured.reviewRef);
     if (workspaceId && reviewRef) {
       if (isCompleteReviewCard(metaCard)) {
         return {
@@ -45,7 +49,9 @@ export function decodeToolResult(result: CallToolResult): DecodedToolResult {
     const root = stringField(structured.root);
     const mode = workspaceMode(structured.mode);
     if (workspaceId && root && mode) {
-      const structuredCard = structuredWorkspaceCardFields(structured) ?? {};
+      const structuredCard = (structured.workspaceId !== undefined
+        ? cardFields(structured)
+        : structuredWorkspaceCardFields(structured)) ?? {};
       return {
         kind: "card",
         card: {
@@ -68,6 +74,10 @@ export function decodeToolResult(result: CallToolResult): DecodedToolResult {
   }
   if (metaCard?.workspaceId && metaCard.root && metaCard.mode) {
     return { kind: "card", card: { ...metaCard, tool: "open_workspace" } };
+  }
+
+  if (structured && typeof structured.result === "string") {
+    return { kind: "plain" };
   }
 
   return { kind: "invalid" };

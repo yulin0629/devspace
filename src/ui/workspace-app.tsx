@@ -61,6 +61,7 @@ let openWorkspaceInstructionKey: string | null = null;
 let showAvailableWorkspaceInstructions = false;
 let pendingToolResult: CallToolResult | null = null;
 let pendingReviewKey: string | null = null;
+let hidden = false;
 
 const maybeAppRoot = document.querySelector<HTMLElement>("#app");
 
@@ -85,7 +86,7 @@ async function boot(): Promise<void> {
       pendingToolResult = result;
       return;
     }
-    void applyToolResult(result);
+    void applyToolResult(result, "apps");
   };
 
   app.onhostcontextchanged = (ctx) => {
@@ -125,19 +126,32 @@ async function boot(): Promise<void> {
       : String(connectError);
   }
 
+  const initialSource: ResultSource = pendingToolResult ? "apps" : "globals";
   const initialResult = pendingToolResult ?? chatGptRestoredResult();
   pendingToolResult = null;
   if (initialResult) {
-    await applyToolResult(initialResult);
+    await applyToolResult(initialResult, initialSource);
   } else {
     render();
   }
 }
 
-async function applyToolResult(result: CallToolResult): Promise<void> {
-  const decoded = decodeToolResult(result);
+type ResultSource = "apps" | "globals";
+
+async function applyToolResult(result: CallToolResult, source: ResultSource): Promise<void> {
+  let decoded = decodeToolResult(result);
+  if (decoded.kind === "invalid" && source === "apps") {
+    // Some hosts deliver a partial MCP Apps result while window.openai already holds the full one.
+    const restored = chatGptRestoredResult();
+    if (restored) decoded = decodeToolResult(restored);
+  }
   if (decoded.kind === "card") {
     setCard(decoded.card);
+    return;
+  }
+  if (decoded.kind === "plain") {
+    hidden = true;
+    clearCard(null);
     return;
   }
   if (decoded.kind === "invalid") {
@@ -173,6 +187,7 @@ async function applyToolResult(result: CallToolResult): Promise<void> {
 
 function setCard(nextCard: ToolResultCard): void {
   pendingReviewKey = null;
+  hidden = false;
   card = nextCard;
   expanded = isInitiallyExpandedCard(nextCard);
   reviewFilesExpanded = false;
@@ -182,7 +197,7 @@ function setCard(nextCard: ToolResultCard): void {
   render();
 }
 
-function clearCard(message: string): void {
+function clearCard(message: string | null): void {
   pendingReviewKey = null;
   card = null;
   errorMessage = message;
@@ -223,7 +238,7 @@ function handleChatGptGlobalsChanged(event: Event): void {
   const customEvent = event as CustomEvent<{ globals?: ChatGptToolGlobals }>;
   const restored = toolResultFromChatGptGlobals(customEvent.detail?.globals)
     ?? chatGptRestoredResult();
-  if (restored) void applyToolResult(restored);
+  if (restored) void applyToolResult(restored, "globals");
 }
 
 function applyHostContext(): void {
@@ -251,6 +266,12 @@ function render(): void {
 
   if (!connected) {
     renderEmpty("Connecting to host...");
+    return;
+  }
+
+  if (hidden) {
+    appRoot.replaceChildren();
+    document.body.style.padding = "0";
     return;
   }
 
