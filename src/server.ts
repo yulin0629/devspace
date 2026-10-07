@@ -76,6 +76,8 @@ import {
 
 const WORKSPACE_APP_MANIFEST_ENTRY = "workspace-app.html";
 const MAX_CONTEXT_ITEMS = 50;
+// Nested instruction paths are only pointers; the model can open a subdirectory for a focused catalog.
+const MAX_MODEL_NESTED_INSTRUCTIONS = 20;
 
 function mcpServerInfo() {
   return {
@@ -521,9 +523,11 @@ function registerMcpSurface(
         : [];
       const visibleAgents = includeBootstrapContext ? cardAgents : [];
       const loadedAgentsFiles = includeBootstrapContext ? cardAgentsFiles : [];
-      const availableAgentsFileOutputs = includeBootstrapContext ? cardAvailableAgentsFiles : [];
+      const availableAgentsFileOutputs = includeBootstrapContext
+        ? cardAvailableAgentsFiles.slice(0, MAX_MODEL_NESTED_INSTRUCTIONS)
+        : [];
       const omittedInstructions = includeBootstrapContext
-        ? Math.max(0, availableAgentsFiles.length - MAX_CONTEXT_ITEMS) : 0;
+        ? Math.max(0, availableAgentsFiles.length - MAX_MODEL_NESTED_INSTRUCTIONS) : 0;
       const omittedSkills = includeBootstrapContext
         ? Math.max(0, allCardSkills.length - MAX_CONTEXT_ITEMS) : 0;
       const contextSummary = [

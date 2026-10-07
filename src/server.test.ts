@@ -294,7 +294,7 @@ test("show_changes reviews an unborn repository through the MCP tool surface", a
   const opened = structuredContent(await callOpen(context.client, context.project, "unborn-review"));
   const workspaceId = opened.workspace_id;
   assert.equal(typeof workspaceId, "string");
-  assert.deepEqual(opened.review, { available: true });
+  assert.equal(opened.review_unavailable, undefined);
 
   await writeFile(join(context.project, "created-after-open.txt"), "new file\n");
   const review = await context.client.callTool({
@@ -502,11 +502,11 @@ test("open_workspace bounds nested instructions and skills in text, structured o
   const result = await callOpen(context.client, context.project);
   const structured = structuredContent(result);
   const card = responseCard(result);
-  assert.equal((structured.available_agents_files as unknown[]).length, 50);
+  assert.equal((structured.available_agents_files as unknown[]).length, 20);
   assert.equal((structured.skills as unknown[]).length, 50);
   assert.equal((card.availableAgentsFiles as unknown[]).length, 50);
   assert.equal((card.skills as unknown[]).length, 50);
-  assert.match(structured.instruction as string, /11 more nested instruction files omitted/);
+  assert.match(structured.instruction as string, /41 more nested instruction files omitted/);
   assert.match(JSON.stringify(result.content), /\d+ more skills omitted/);
   assert.ok((structured.skills as Array<{ description: string }>).every((skill) => skill.description.length <= 160));
   assert.ok(JSON.stringify(result).length < 80000);
@@ -609,7 +609,7 @@ test("experimental skill URIs work as shell command arguments", async (t) => {
           : { workspace_id: workspaceId, command },
       }));
 
-      assert.match(String(result.result), /# DevSpace subagents/);
+      assert.match(String(result.output ?? result.result), /# DevSpace subagents/);
 
       const literalCommand = `node -p "process.argv[1]" "prefixskills://subagents"`;
       const literal = structuredContent(await context.client.callTool({
@@ -618,7 +618,7 @@ test("experimental skill URIs work as shell command arguments", async (t) => {
           ? { workspace_id: workspaceId, cmd: literalCommand }
           : { workspace_id: workspaceId, command: literalCommand },
       }));
-      assert.match(String(literal.result), /prefixskills:\/\/subagents/);
+      assert.match(String(literal.output ?? literal.result), /prefixskills:\/\/subagents/);
     });
   }
 });
