@@ -19,6 +19,7 @@
 # this script, so the restart is detached and the health check is skipped; check
 # /healthz yourself a few seconds later.
 set -euo pipefail
+shopt -s inherit_errexit  # keep set -e inside $(...), where build_release runs
 
 REMOTE="${DEVSPACE_DEPLOY_REMOTE:-https://github.com/yulin0629/devspace.git}"
 REF="main"
@@ -209,11 +210,12 @@ activate() {
 # ---------- build ----------
 
 ensure_pnpm() {
-  command -v pnpm >/dev/null 2>&1 && return
+  # A mise shim can exist without a configured version, so test that pnpm actually runs.
+  pnpm --version >/dev/null 2>&1 && return
   local shim_dir pm
   shim_dir="$(mktemp -d)"
   pm="$(python3 -c 'import json;print(json.load(open("package.json")).get("packageManager","pnpm"))')"
-  if command -v corepack >/dev/null 2>&1; then
+  if corepack --version >/dev/null 2>&1; then
     printf '#!/bin/sh\nexec corepack pnpm "$@"\n' > "$shim_dir/pnpm"
   else
     printf '#!/bin/sh\nexec npx -y %s "$@"\n' "$pm" > "$shim_dir/pnpm"
@@ -228,7 +230,7 @@ build_release() {
   local sha version release
   sha="$(git -C "$SOURCE_DIR" rev-parse FETCH_HEAD)"
   version="$(git -C "$SOURCE_DIR" show "$sha:package.json" | python3 -c 'import json,sys;print(json.load(sys.stdin)["version"])')"
-  release="$RELEASES_DIR/v$version-${sha:0:12}"
+  release="$RELEASES_DIR/v${version//+/-}-${sha:0:12}"
   if [ -f "$release/dist/cli.js" ] && [ "$(cat "$release/SOURCE_COMMIT" 2>/dev/null)" = "$sha" ]; then
     log "release already built: $release" >&2
   else
