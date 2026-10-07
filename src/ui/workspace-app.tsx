@@ -85,7 +85,7 @@ async function boot(): Promise<void> {
       pendingToolResult = result;
       return;
     }
-    void applyToolResult(result);
+    void applyToolResult(result, "apps");
   };
 
   app.onhostcontextchanged = (ctx) => {
@@ -125,23 +125,31 @@ async function boot(): Promise<void> {
       : String(connectError);
   }
 
+  const initialSource: ResultSource = pendingToolResult ? "apps" : "globals";
   const initialResult = pendingToolResult ?? chatGptRestoredResult();
   pendingToolResult = null;
   if (initialResult) {
-    await applyToolResult(initialResult);
+    await applyToolResult(initialResult, initialSource);
   } else {
     render();
   }
 }
 
-async function applyToolResult(result: CallToolResult): Promise<void> {
-  const decoded = decodeToolResult(result);
+type ResultSource = "apps" | "globals" | "globals-event";
+
+async function applyToolResult(result: CallToolResult, source: ResultSource): Promise<void> {
+  let decoded = decodeToolResult(result);
+  if (decoded.kind === "invalid" && source === "apps") {
+    // Some hosts deliver a partial MCP Apps result while window.openai already holds the full one.
+    const restored = chatGptRestoredResult();
+    if (restored) decoded = decodeToolResult(restored);
+  }
   if (decoded.kind === "card") {
     setCard(decoded.card);
     return;
   }
   if (decoded.kind === "invalid") {
-    clearCard("No result card is available for this tool result.");
+    clearCard(`No result card is available for this tool result. (${describeResult(result, source)})`);
     return;
   }
 
@@ -223,7 +231,22 @@ function handleChatGptGlobalsChanged(event: Event): void {
   const customEvent = event as CustomEvent<{ globals?: ChatGptToolGlobals }>;
   const restored = toolResultFromChatGptGlobals(customEvent.detail?.globals)
     ?? chatGptRestoredResult();
-  if (restored) void applyToolResult(restored);
+  if (restored) void applyToolResult(restored, "globals-event");
+}
+
+// Compact trace of what the host delivered, so an empty card can be diagnosed from a screenshot.
+function describeResult(result: CallToolResult, source: ResultSource): string {
+  const keys = (value: unknown) => value && typeof value === "object"
+    ? Object.keys(value as Record<string, unknown>).slice(0, 6).join(",") || "-"
+    : "none";
+  const meta = (result as { _meta?: Record<string, unknown> })._meta;
+  return [
+    source,
+    `sc:${keys(result.structuredContent)}`,
+    `meta:${keys(meta)}`,
+    `content:${Array.isArray(result.content) ? result.content.length : "none"}`,
+    `openai:${typeof window.openai === "object" && window.openai ? "yes" : "no"}`,
+  ].join(" ");
 }
 
 function applyHostContext(): void {
