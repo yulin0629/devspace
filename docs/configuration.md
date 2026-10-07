@@ -120,6 +120,24 @@ This avoids rendering an iframe for every read, edit, search, or command call.
 Setting `ui.enabled` to `false` removes the metadata but does not remove the
 `show_changes` tool.
 
+### Machine label
+
+When one host connects to several DevSpace servers, every server otherwise
+advertises the same instructions and tool descriptions. Hosts that defer tool
+schemas behind a tool search see only names and server instructions, so they
+cannot tell the machines apart. Set `tools.machine` to name each one:
+
+```jsonc
+"tools": {
+  "mode": "claude",
+  "machine": { "name": "Oracle", "description": "always-on cloud VM" }
+}
+```
+
+The server instructions then begin with the machine name, description, and when
+to use it, and every tool description is prefixed with `On <name>:`. Keep the
+description to one line; it is sent on every connection.
+
 ## Skills and subagents
 
 DevSpace discovers standard Agent Skills from `~/.agents/skills`, project

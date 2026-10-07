@@ -99,6 +99,28 @@
             "claude",
             "codex"
           ]
+        },
+        "machine": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40,
+              "description": "Short machine name the user says, such as Oracle or MBP."
+            },
+            "description": {
+              "description": "One line on what this machine is and what it is used for.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 300
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "additionalProperties": false,
+          "description": "Model-facing machine label, so hosts connected to several DevSpace servers can tell them apart and find the right tools."
         }
       },
       "additionalProperties": false

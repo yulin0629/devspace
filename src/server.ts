@@ -138,7 +138,35 @@ function serverInstructions(
   const agents = `Follow instructions returned by ${toolNames.openWorkspace}. Before working under a path listed in available_agents_files, use ${toolNames.read} to inspect that instruction file and follow it. `;
   const common = `Call ${toolNames.openWorkspace} when starting work in a project folder or isolated worktree without a usable workspace_id, then reuse the returned workspace_id for subsequent operations in that workspace.`;
 
-  return `${common} ${toolSurface.instructions({ agents, skills })}${artifactInstruction}${showChangesInstruction}`;
+  return `${machineInstruction(config)}${common} ${toolSurface.instructions({ agents, skills })}${artifactInstruction}${showChangesInstruction}`;
+}
+
+export function machineInstruction(config: Pick<ServerConfig, "machine">): string {
+  const machine = config.machine;
+  if (!machine) return "";
+  const about = machine.description ? ` (${machine.description})` : "";
+  return `DevSpace on ${machine.name}${about}. Use these tools when the user mentions ${machine.name} or asks to run commands, read or edit files, or work in repositories on this machine; work the host can do in its own sandbox does not need DevSpace. `;
+}
+
+export function withMachineLabel(
+  server: McpRegistrationTarget,
+  config: Pick<ServerConfig, "machine">,
+): McpRegistrationTarget {
+  const name = config.machine?.name;
+  if (!name) return server;
+  return {
+    registerTool: ((toolName: string, definition: Record<string, unknown>, ...rest: unknown[]) => {
+      const description = typeof definition.description === "string"
+        ? `On ${name}: ${definition.description}`
+        : definition.description;
+      return (server.registerTool as (...callArgs: unknown[]) => unknown)(
+        toolName,
+        { ...definition, description },
+        ...rest,
+      );
+    }) as McpRegistrationTarget["registerTool"],
+    registerResource: server.registerResource.bind(server),
+  };
 }
 
 function skillReferenceLabel(config: ServerConfig): string {
@@ -348,9 +376,10 @@ function registerMcpSurface(
   incomingArtifactAdapters: readonly IncomingArtifactAdapter[],
   trackToolActivity?: TrackToolActivity,
 ): void {
+  const labeledServer = withMachineLabel(server, config);
   const registrationTarget = trackToolActivity
-    ? withTrackedToolHandlers(server, trackToolActivity)
-    : server;
+    ? withTrackedToolHandlers(labeledServer, trackToolActivity)
+    : labeledServer;
   const toolSurface = getToolSurface(config.toolMode);
 
   registerAppResource(

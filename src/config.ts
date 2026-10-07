@@ -8,6 +8,11 @@ import type { SubagentsConfig } from "./local-agent-config.js";
 
 export type { ToolMode } from "./config-schema.js";
 
+export interface MachineConfig {
+  name: string;
+  description?: string;
+}
+
 export interface ServerConfig {
   configDir: string;
   host: string;
@@ -18,6 +23,7 @@ export interface ServerConfig {
   allowedHosts: string[];
   publicBaseUrl: string;
   toolMode: ToolMode;
+  machine?: MachineConfig;
   uiEnabled: boolean;
   stateDir: string;
   worktreeRoot: string;
@@ -72,6 +78,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     allowedHosts: normalizeAllowedHosts(derivedAllowedHosts),
     publicBaseUrl,
     toolMode: stored.tools.mode,
+    machine: stored.tools.machine,
     uiEnabled: stored.ui.enabled,
     stateDir: normalizePath(stored.storage.stateDir),
     worktreeRoot: normalizePath(stored.workspaces.worktreeRoot),

@@ -22,8 +22,17 @@ const storageConfigSchema = z.object({
   stateDir: z.string().trim().min(1).default("~/.local/share/devspace"),
 }).strict().prefault({});
 
+const machineConfigSchema = z.object({
+  name: z.string().trim().min(1).max(40)
+    .describe("Short machine name the user says, such as Oracle or MBP."),
+  description: z.string().trim().min(1).max(300).optional()
+    .describe("One line on what this machine is and what it is used for."),
+}).strict()
+  .describe("Model-facing machine label, so hosts connected to several DevSpace servers can tell them apart and find the right tools.");
+
 const toolsConfigSchema = z.object({
   mode: z.enum(["claude", "codex"]).default("codex"),
+  machine: machineConfigSchema.optional(),
 }).strict().prefault({});
 
 const uiConfigSchema = z.object({
