@@ -19,7 +19,7 @@
 # this script, so the restart is detached and the health check is skipped; check
 # /healthz yourself a few seconds later.
 set -euo pipefail
-shopt -s inherit_errexit  # keep set -e inside $(...), where build_release runs
+# macOS ships bash 3.2 (no inherit_errexit), so build_release checks every step explicitly.
 
 REMOTE="${DEVSPACE_DEPLOY_REMOTE:-https://github.com/yulin0629/devspace.git}"
 REF="main"
@@ -226,17 +226,17 @@ ensure_pnpm() {
 
 build_release() {
   [ -d "$SOURCE_DIR/.git" ] || die "no Git checkout at $SOURCE_DIR (set --source)"
-  git -C "$SOURCE_DIR" fetch -q "$REMOTE" "$REF"
+  git -C "$SOURCE_DIR" fetch -q "$REMOTE" "$REF" || die "git fetch $REMOTE $REF failed"
   local sha version release
-  sha="$(git -C "$SOURCE_DIR" rev-parse FETCH_HEAD)"
+  sha="$(git -C "$SOURCE_DIR" rev-parse FETCH_HEAD)" || die "cannot resolve FETCH_HEAD"
   version="$(git -C "$SOURCE_DIR" show "$sha:package.json" | python3 -c 'import json,sys;print(json.load(sys.stdin)["version"])')"
   release="$RELEASES_DIR/v${version//+/-}-${sha:0:12}"
   if [ -f "$release/dist/cli.js" ] && [ "$(cat "$release/SOURCE_COMMIT" 2>/dev/null)" = "$sha" ]; then
     log "release already built: $release" >&2
   else
     log "building $REF ($sha) into $release" >&2
-    rm -rf "$release" && mkdir -p "$release"
-    git -C "$SOURCE_DIR" archive "$sha" | tar -x -C "$release"
+    rm -rf "$release" && mkdir -p "$release" || die "cannot create $release"
+    git -C "$SOURCE_DIR" archive "$sha" | tar -x -C "$release" || die "git archive failed"
     echo "$sha" > "$release/SOURCE_COMMIT"
     (
       cd "$release"
@@ -245,7 +245,7 @@ build_release() {
         || die "pnpm install failed, see $release/.deploy-install.log"
       pnpm build >"$release/.deploy-build.log" 2>&1 \
         || die "build failed, see $release/.deploy-build.log"
-    ) >&2
+    ) >&2 || exit 1
     [ -f "$release/dist/cli.js" ] || die "build produced no dist/cli.js"
   fi
   (cd "$release" && node --input-type=module -e "import {loadConfig} from './dist/config.js'; loadConfig()") \
