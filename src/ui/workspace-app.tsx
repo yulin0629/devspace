@@ -61,6 +61,7 @@ let openWorkspaceInstructionKey: string | null = null;
 let showAvailableWorkspaceInstructions = false;
 let pendingToolResult: CallToolResult | null = null;
 let pendingReviewKey: string | null = null;
+let hidden = false;
 
 const maybeAppRoot = document.querySelector<HTMLElement>("#app");
 
@@ -148,6 +149,11 @@ async function applyToolResult(result: CallToolResult, source: ResultSource): Pr
     setCard(decoded.card);
     return;
   }
+  if (decoded.kind === "plain") {
+    hidden = true;
+    clearCard(null);
+    return;
+  }
   if (decoded.kind === "invalid") {
     clearCard(`No result card is available for this tool result. (${describeResult(result, source)})`);
     return;
@@ -181,6 +187,7 @@ async function applyToolResult(result: CallToolResult, source: ResultSource): Pr
 
 function setCard(nextCard: ToolResultCard): void {
   pendingReviewKey = null;
+  hidden = false;
   card = nextCard;
   expanded = isInitiallyExpandedCard(nextCard);
   reviewFilesExpanded = false;
@@ -190,7 +197,7 @@ function setCard(nextCard: ToolResultCard): void {
   render();
 }
 
-function clearCard(message: string): void {
+function clearCard(message: string | null): void {
   pendingReviewKey = null;
   card = null;
   errorMessage = message;
@@ -274,6 +281,12 @@ function render(): void {
 
   if (!connected) {
     renderEmpty("Connecting to host...");
+    return;
+  }
+
+  if (hidden) {
+    appRoot.replaceChildren();
+    document.body.style.padding = "0";
     return;
   }
 

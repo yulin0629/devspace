@@ -186,3 +186,10 @@ test("pre-snake_case review results become a reload reference", () => {
     reviewRef: "b".repeat(40),
   });
 });
+
+test("plain tool results decode as plain so a stale widget can stay empty", () => {
+  assert.deepEqual(
+    decodeToolResult({ content: [{ type: "text", text: "ok" }], structuredContent: { result: "ok" } }),
+    { kind: "plain" },
+  );
+});
