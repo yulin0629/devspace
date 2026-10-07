@@ -15,6 +15,7 @@ import {
 } from "./types.js";
 import {
   contentText,
+  expandSkillUrisInShellCommand,
   logFailedToolResponse,
   logToolCall,
   resultOutputSchema,
@@ -175,7 +176,11 @@ function registerShellTool(context: ToolRegistrationContext): void {
     toolNames.shell,
     {
       title: "Bash",
-      description: CLAUDE_SHELL_DESCRIPTION,
+      description:
+        CLAUDE_SHELL_DESCRIPTION
+        + (config.experimentalSkillUris
+          ? " Standalone skills:// arguments are resolved before execution."
+          : ""),
       inputSchema: {
         workspace_id: z.string().describe(workspaceIdDescription),
         command: z
@@ -206,7 +211,14 @@ function registerShellTool(context: ToolRegistrationContext): void {
         workspace,
         workingDirectory,
       );
-      const response = await runShellTool(input, {
+      const command = await expandSkillUrisInShellCommand(
+        config,
+        workspaces,
+        workspace,
+        input.command,
+        "bash",
+      );
+      const response = await runShellTool({ ...input, command }, {
         cwd,
       });
 
