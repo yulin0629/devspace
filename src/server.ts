@@ -943,7 +943,9 @@ export function createServer(
   });
 
   if (config.logging.trustProxy) {
-    app.set("trust proxy", true);
+    // Trust only the local reverse proxy (cloudflared, nginx). `true` would take the
+    // leftmost X-Forwarded-For entry, which any client can spoof to dodge rate limits.
+    app.set("trust proxy", "loopback");
   }
 
   app.use((req, res, next) => {
