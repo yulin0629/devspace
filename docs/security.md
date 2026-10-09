@@ -129,6 +129,8 @@ six documented tools have detailed whitelist fields. Bash summaries omit
 arguments; output retains only bounded operational status/count lines, with
 other output replaced by `[output omitted]`. Filters redact credential formats,
 assignments, auth headers, private keys and URL credentials in metadata.
+Machine/workspace identifiers requiring filtering use SHA-256 pseudonyms to
+preserve distinct session identities without storing their plaintext.
 Arbitrary secrets disguised as ordinary filenames cannot be identified reliably.
 Forwarder delivery repeats these filters before calling Agent Memory.
 

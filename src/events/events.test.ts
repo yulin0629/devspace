@@ -191,6 +191,24 @@ test("process exit and signal failures affect outcomes without adding generic to
   }
 });
 
+test("sensitive or truncated identities remain distinct without retaining their plaintext", () => {
+  const registry = { eventContext: () => undefined } as unknown as WorkspaceRegistry;
+  const identities = ["token=fixture-alpha", "token=fixture-beta", "host-" + "a".repeat(130), "host-" + "a".repeat(129) + "b"];
+  const recorded = identities.map((identity) => toolEvent("open_workspace", { workspace_id: identity }, {}, false, 1,
+    new Date().toISOString(), { machine: { name: identity } } as ServerConfig, registry));
+  assert.equal(new Set(recorded.map((event) => event.machine_id)).size, identities.length);
+  assert.equal(new Set(recorded.map((event) => event.workspace_id)).size, identities.length);
+  for (const [index, event] of recorded.entries()) {
+    assert.ok(!JSON.stringify(event).includes(identities[index]));
+    assert.ok(event.machine_id.length <= 128);
+    assert.equal(event.details?.workspace_id, event.workspace_id);
+  }
+  const ordinary = toolEvent("other", { workspace_id: "workspace" }, {}, false, 1, new Date().toISOString(),
+    { machine: { name: "host" } } as ServerConfig, registry);
+  assert.equal(ordinary.machine_id, "host");
+  assert.equal(ordinary.workspace_id, "workspace");
+});
+
 test("retention warning fires once per approach episode and resets after pruning", { skip: process.platform === "win32" }, async (t) => {
   const dir = join(await temporary(t), "events"), value = sample();
   const bytes = Buffer.byteLength(JSON.stringify(value) + "\n");

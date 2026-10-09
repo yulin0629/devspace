@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 import type { McpRegistrationTarget } from "../mcp-modern-server.js";
 import type { ServerConfig } from "../config.js";
 import type { WorkspaceRegistry } from "../workspaces.js";
-import { commandSummary, redact, statusOutput } from "./privacy.js";
+import { commandSummary, redact, sessionIdentity, statusOutput } from "./privacy.js";
 import { EventSpool, type ToolEvent } from "./spool.js";
 
 function record(value: unknown): Record<string, any> {
@@ -38,7 +38,7 @@ export function toolEvent(tool: string, inputValue: unknown, resultValue: unknow
       if (path) details.path = path;
       details.mode = String(result.structuredContent?.mode ?? input.mode ?? "checkout");
       if (typeof input.base_ref === "string") details.base_ref = redact(input.base_ref, 256);
-      details.workspace_id = workspaceId;
+      details.workspace_id = sessionIdentity(workspaceId);
       break;
     case "read":
       if (path) details.path = path;
@@ -82,7 +82,7 @@ export function toolEvent(tool: string, inputValue: unknown, resultValue: unknow
   }
   return {
     schema_version: 1, event_id: randomUUID(), event_type: "tool.completed", occurred_at: occurredAt,
-    machine_id: redact(config.machine?.name ?? hostname(), 128), workspace_id: redact(workspaceId, 128),
+    machine_id: sessionIdentity(config.machine?.name ?? hostname()), workspace_id: sessionIdentity(workspaceId),
     project: redact(context?.project ?? "unknown", 256), cwd: redact(cwd), tool,
     outcome: { status: failed || result.isError || processFailed ? "failure" : "success", duration_ms: durationMs },
     ...(Object.keys(details).length ? { details } : {}),

@@ -111,7 +111,9 @@ Each completion has `schema_version`, UUID `event_id`, `event_type`,
 `outcome` (status and elapsed milliseconds). Machine identity uses `tools.machine.name`
 when configured, otherwise the local hostname. Workspace/project/cwd come from
 the existing workspace registry; request metadata is not stored or treated as
-a global conversation identifier.
+a global conversation identifier. Machine/workspace identities that require
+redaction or truncation use deterministic SHA-256 pseudonyms to prevent distinct
+identities from merging; ordinary identifiers retain their original values.
 
 The initial detailed whitelist covers `open_workspace` (path, mode, base ref,
 workspace ID), `read` (path, offset, limit, returned text bytes), `show_changes`

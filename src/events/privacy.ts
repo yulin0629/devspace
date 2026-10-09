@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+
 export function redact(value: string, limit = 2048): string {
   return value
     .replace(/data:[^,\s]+;base64,[A-Za-z0-9+/_=-]+/gi, "[attachment omitted]")
@@ -8,6 +10,10 @@ export function redact(value: string, limit = 2048): string {
     .replace(/\b(?:sk-|gh[pousr]_|github_pat_|AKIA|ASIA)[A-Za-z0-9_/-]+/g, "[redacted]")
     .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, "")
     .slice(0, limit);
+}
+
+export function sessionIdentity(value: string): string {
+  return redact(value, 128) === value ? value : `redacted-${createHash("sha256").update(value).digest("hex")}`;
 }
 
 export function commandSummary(command: string): string {
