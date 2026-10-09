@@ -150,7 +150,7 @@ test("Git discovery in macOS Home also excludes files on other filesystems", asy
   const realLstat = fs.lstat;
   t.mock.method(fs, "lstat", async (path: Parameters<typeof fs.lstat>[0]) => {
     const stats = await realLstat(path);
-    return String(path).includes("/mounted/")
+    return String(path).replaceAll("\\", "/").includes("/mounted/")
       ? Object.assign(Object.create(Object.getPrototypeOf(stats)), stats, { dev: Number(stats.dev) + 1 }) : stats;
   });
   assert.deepEqual((await discoverInstructionPaths(root, { platform: "darwin", homeDir: root })).paths, [join(root, "github/project/AGENTS.md")]);
