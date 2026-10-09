@@ -20,6 +20,14 @@ export function toolEvent(tool: string, inputValue: unknown, resultValue: unknow
   durationMs: number, occurredAt: string, config: ServerConfig, workspaces: WorkspaceRegistry): ToolEvent {
   const input = record(inputValue);
   const result = record(resultValue);
+  let exitCode = result.structuredContent?.exit_code ?? result.details?.exitCode;
+  const signal = result.structuredContent?.signal ?? result.details?.signal;
+  if (tool === "bash" && result.isError && typeof exitCode !== "number") {
+    const match = text(result).match(/(?:^|\n)Command exited with code (\d+)\s*$/);
+    if (match) exitCode = Number(match[1]);
+  }
+  const processFailed = ["bash", "exec_command", "write_stdin"].includes(tool)
+    && ((typeof exitCode === "number" && exitCode !== 0) || (typeof signal === "string" && signal.length > 0));
   const workspaceId = String(result.structuredContent?.workspace_id ?? input.workspace_id ?? "none");
   const context = workspaces.eventContext(workspaceId);
   const cwd = context?.cwd ?? process.cwd();
@@ -36,7 +44,7 @@ export function toolEvent(tool: string, inputValue: unknown, resultValue: unknow
       if (path) details.path = path;
       if (typeof input.offset === "number") details.offset = input.offset;
       if (typeof input.limit === "number") details.limit = input.limit;
-      details.read_bytes = Buffer.byteLength(text(result));
+      if (!failed && !result.isError) details.read_bytes = Buffer.byteLength(text(result));
       break;
     case "show_changes": {
       const summary = result._meta?.card?.summary;
@@ -68,7 +76,7 @@ export function toolEvent(tool: string, inputValue: unknown, resultValue: unknow
     case "bash":
       details.command_summary = commandSummary(String(input.command ?? ""));
       details.working_directory = redact(resolve(cwd, typeof input.working_directory === "string" ? input.working_directory : "."));
-      if (typeof result.details?.exitCode === "number") details.exit_code = result.details.exitCode;
+      if (typeof exitCode === "number") details.exit_code = exitCode;
       details.output = statusOutput(text(result));
       break;
   }
@@ -76,7 +84,7 @@ export function toolEvent(tool: string, inputValue: unknown, resultValue: unknow
     schema_version: 1, event_id: randomUUID(), event_type: "tool.completed", occurred_at: occurredAt,
     machine_id: redact(config.machine?.name ?? hostname(), 128), workspace_id: redact(workspaceId, 128),
     project: redact(context?.project ?? "unknown", 256), cwd: redact(cwd), tool,
-    outcome: { status: failed || result.isError ? "failure" : "success", duration_ms: durationMs },
+    outcome: { status: failed || result.isError || processFailed ? "failure" : "success", duration_ms: durationMs },
     ...(Object.keys(details).length ? { details } : {}),
   };
 }
@@ -95,7 +103,7 @@ export function withEventObservation(server: McpRegistrationTarget, config: Serv
           const occurredAt = new Date().toISOString();
           try {
             const event = toolEvent(tool, handlerArgs[0], result, failed, duration, occurredAt, config, workspaces);
-            spool.enqueue(() => event);
+            spool.enqueue(event);
           }
           catch { console.warn("[devspace.events] enqueue_failed_event_dropped"); }
         };

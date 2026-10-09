@@ -353,8 +353,14 @@ export function createMcpServer(
   resolveLocalAgentProviders: () => LocalAgentProviderStatus[],
   incomingArtifactAdapters: readonly IncomingArtifactAdapter[],
   trackToolActivity?: TrackToolActivity,
-  eventSpool = new EventSpool({ enabled: config.events?.enabled ?? false }),
+  eventSpool?: EventSpool,
 ): McpServer {
+  const ownedSpool = eventSpool === undefined;
+  const spool = eventSpool ?? new EventSpool({ enabled: config.events?.enabled ?? false });
+  const ownedActivity = ownedSpool && config.events?.enabled ? new ToolActivityTracker() : undefined;
+  const tracking: TrackToolActivity | undefined = ownedActivity
+    ? <T>(operation: () => Promise<T>) => ownedActivity.track(() => trackToolActivity ? trackToolActivity(operation) : operation())
+    : trackToolActivity;
   const toolSurface = getToolSurface(config.toolMode);
   const server = new McpServer(
     mcpServerInfo(),
@@ -371,9 +377,17 @@ export function createMcpServer(
     processSessions,
     resolveLocalAgentProviders,
     incomingArtifactAdapters,
-    trackToolActivity,
-    eventSpool,
+    tracking,
+    spool,
   );
+  if (ownedSpool) {
+    const close = server.close.bind(server);
+    server.close = async () => {
+      await close();
+      await ownedActivity?.waitForIdle();
+      await spool.close();
+    };
+  }
   return server;
 }
 
@@ -385,8 +399,8 @@ function registerMcpSurface(
   processSessions: ProcessSessionManager,
   resolveLocalAgentProviders: () => LocalAgentProviderStatus[],
   incomingArtifactAdapters: readonly IncomingArtifactAdapter[],
-  trackToolActivity?: TrackToolActivity,
-  eventSpool = new EventSpool({ enabled: config.events?.enabled ?? false }),
+  trackToolActivity: TrackToolActivity | undefined,
+  eventSpool: EventSpool,
 ): void {
   const labeledServer = withMachineLabel(server, config);
   const trackedServer = trackToolActivity

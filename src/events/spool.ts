@@ -26,12 +26,17 @@ export interface ToolEvent {
 
 const SEGMENT_NAME = /^\d+-[0-9a-f-]{36}\.jsonl$/;
 const QUEUE_LIMIT = 1024;
+const RETENTION_CHECK_MS = 60 * 1000;
+const IO_CODES = new Set(["EACCES", "EEXIST", "EIO", "EISDIR", "EMFILE", "ENFILE", "ENOENT", "ENOSPC", "ENOTDIR", "EPERM", "EROFS", "EINVAL", "INVALID_EVENTS_DIRECTORY"]);
 
 export class EventSpool {
-  private readonly queue: Array<() => ToolEvent> = [];
+  private readonly queue: Array<ToolEvent | undefined> = [];
   private readonly idle: Array<() => void> = [];
   private draining = false;
   private initialized = false;
+  private retentionTimer?: ReturnType<typeof setInterval>;
+  private maintenanceQueued = false;
+  private retentionApproaching = false;
   private current?: { file: FileHandle; name: string; bytes: number; created: number };
   private readonly enabled: boolean;
   readonly dir: string;
@@ -53,11 +58,15 @@ export class EventSpool {
     this.warn = options.warn ?? ((code) => console.warn(`[devspace.events] ${code}`));
   }
 
-  enqueue(event: () => ToolEvent): void {
+  enqueue(event: ToolEvent): void {
     if (!this.enabled) return;
     // debt: ceiling: 1024 pending events; upgrade: sustained writer backpressure.
     if (this.queue.length >= QUEUE_LIMIT) { this.warn("queue_limit_event_dropped"); return; }
     this.queue.push(event);
+    this.startDrain();
+  }
+
+  private startDrain(): void {
     if (!this.draining) {
       this.draining = true;
       setImmediate(() => { void this.drain(); });
@@ -66,12 +75,24 @@ export class EventSpool {
 
   private async drain(): Promise<void> {
     while (this.queue.length) {
-      const next = this.queue.shift()!;
-      try { await this.append(next()); }
-      catch {
+      const next = this.queue.shift();
+      try {
+        if (next) await this.append(next);
+        else {
+          this.maintenanceQueued = false;
+          if (this.current && this.now() - this.current.created >= this.limits.retentionMs) {
+            await this.current.file.close();
+            this.current = undefined;
+          }
+          await this.prune(0);
+        }
+      }
+      catch (error) {
         await this.current?.file.close().catch(() => {});
         this.current = undefined;
-        this.warn("write_failed_event_dropped");
+        this.initialized = false;
+        const code = (error as NodeJS.ErrnoException)?.code;
+        this.warn(`${next ? "write_failed_event_dropped" : "retention_failed"}:${code && IO_CODES.has(code) ? code : "UNKNOWN"}`);
       }
     }
     this.draining = false;
@@ -84,6 +105,8 @@ export class EventSpool {
 
   async close(): Promise<void> {
     await this.flush();
+    clearInterval(this.retentionTimer);
+    this.retentionTimer = undefined;
     await this.current?.file.close();
     this.current = undefined;
   }
@@ -100,9 +123,18 @@ export class EventSpool {
     if (!this.initialized) {
       await mkdir(this.dir, { recursive: true, mode: 0o700 });
       const info = await lstat(this.dir);
-      if (!info.isDirectory() || info.uid !== process.getuid?.()) throw new Error("invalid_events_directory");
+      if (!info.isDirectory() || info.uid !== process.getuid?.()) throw Object.assign(new Error("invalid_events_directory"), { code: "INVALID_EVENTS_DIRECTORY" });
       await chmod(this.dir, 0o700);
       this.initialized = true;
+      if (!this.retentionTimer) {
+        this.retentionTimer = setInterval(() => {
+          if (this.maintenanceQueued) return;
+          this.maintenanceQueued = true;
+          this.queue.push(undefined);
+          this.startDrain();
+        }, Math.max(1, Math.min(RETENTION_CHECK_MS, this.limits.retentionMs / 5)));
+        this.retentionTimer.unref();
+      }
     }
     if (this.current && (this.current.bytes + bytes > this.limits.segmentBytes
       || this.now() - this.current.created >= this.limits.retentionMs)) {
@@ -121,7 +153,7 @@ export class EventSpool {
   }
 
   private async prune(incoming: number): Promise<void> {
-    const files = [];
+    const files: Array<{ name: string; bytes: number; created: number }> = [];
     for (const name of await readdir(this.dir)) {
       if (!SEGMENT_NAME.test(name)) continue;
       const info = await lstat(join(this.dir, name));
@@ -129,14 +161,18 @@ export class EventSpool {
     }
     files.sort((a, b) => a.created - b.created || a.name.localeCompare(b.name));
     let total = files.reduce((sum, file) => sum + file.bytes, 0) + incoming;
-    if (total >= this.limits.retentionBytes * 0.8
-      || files.some((file) => this.now() - file.created >= this.limits.retentionMs * 0.8)) this.warn("retention_limit_approaching");
+    const retained = new Set(files.map((file) => file.name));
+    const approaching = () => total >= this.limits.retentionBytes * 0.8
+      || files.some((file) => retained.has(file.name) && this.now() - file.created >= this.limits.retentionMs * 0.8);
+    if (approaching() && !this.retentionApproaching) this.warn("retention_limit_approaching");
     for (const file of files) {
       if (file.name === this.current?.name) continue;
       if (total <= this.limits.retentionBytes && this.now() - file.created < this.limits.retentionMs) continue;
       this.warn("retention_removing_oldest_segment");
       await unlink(join(this.dir, file.name));
       total -= file.bytes;
+      retained.delete(file.name);
     }
+    this.retentionApproaching = approaching();
   }
 }

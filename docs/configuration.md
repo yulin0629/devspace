@@ -96,10 +96,14 @@ on macOS and Linux in this first version,
 private `0700` directories and `0600` files. A record is at most 16 KiB including
 its newline, and segments rotate at 16 MiB. Retention removes oldest segments
 after seven days or at 1 GiB, whichever limit applies first. The writer warns
-at 80% of a retention limit and again before deleting retained segments. An
+once per crossing of 80% of a retention limit and again before deleting retained
+segments. An active writer also checks idle segments once per minute through
+the same FIFO, so expiration does not depend on another tool completion. An
 event with oversized details drops those details; a still-oversized envelope
 is dropped with a warning. Write failures and queue overflow warn without
-changing MCP results. The in-memory queue holds at most 1,024 pending events;
+changing MCP results. Failure warnings include a sanitized filesystem error
+code; paths and exception messages are excluded. The in-memory queue holds
+at most 1,024 pending events;
 unflushed events can be lost when the process crashes.
 
 Each completion has `schema_version`, UUID `event_id`, `event_type`,
@@ -113,8 +117,10 @@ The initial detailed whitelist covers `open_workspace` (path, mode, base ref,
 workspace ID), `read` (path, offset, limit, returned text bytes), `show_changes`
 (file/addition/removal counts), `write` (path, content bytes, lines), `edit`
 (path, edit count, old/new bytes) and `bash` (filtered command summary, working
-directory, available exit code and bounded status output). Other tools retain
-only the envelope/outcome. In Codex mode, `apply_patch`, `exec_command` and
+directory, available exit code and bounded status output). Bash nonzero-exit
+codes come from the pinned Pi adapter's terminal status line when present;
+process exit codes/signals also determine generic command outcomes. Other tools
+retain only the envelope/outcome. In Codex mode, `apply_patch`, `exec_command` and
 `write_stdin` therefore record generic completion events.
 
 The paired forwarder and deployment sequence are documented in

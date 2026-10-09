@@ -15,7 +15,7 @@ import { createReviewCheckpointManager } from "../review-checkpoints.js";
 import { ProcessSessionManager } from "../process-sessions.js";
 import { writeTestDevspaceConfig } from "../test-support/config.test.js";
 import type { McpRegistrationTarget } from "../mcp-modern-server.js";
-import { withEventObservation } from "./observation.js";
+import { toolEvent, withEventObservation } from "./observation.js";
 import { EventSpool, EVENT_LIMITS, type ToolEvent } from "./spool.js";
 import { commandSummary, redact, statusOutput } from "./privacy.js";
 
@@ -73,10 +73,11 @@ test("real MCP handlers emit the six whitelisted tools and retain their original
   assert.ok(!(await call("bash", { workspace_id, command: "printf 'PASS\\n'" })).isError);
   assert.ok(!(await call("show_changes", { workspace_id })).isError);
   assert.equal((await call("read", { workspace_id, path: "missing.ts" })).isError, true);
+  assert.equal((await call("bash", { workspace_id, command: "exit 7" })).isError, true);
   await spool.flush();
   const recorded = await events(spool.dir);
-  assert.deepEqual(recorded.map((event) => event.tool), ["open_workspace", "read", "write", "edit", "bash", "show_changes", "read"]);
-  assert.equal(new Set(recorded.map((event) => event.event_id)).size, 7);
+  assert.deepEqual(recorded.map((event) => event.tool), ["open_workspace", "read", "write", "edit", "bash", "show_changes", "read", "bash"]);
+  assert.equal(new Set(recorded.map((event) => event.event_id)).size, 8);
   assert.equal(recorded[0].workspace_id, workspace_id);
   assert.equal(recorded[0].cwd, root);
   assert.equal(recorded[0].details?.mode, "checkout");
@@ -93,14 +94,17 @@ test("real MCP handlers emit the six whitelisted tools and retain their original
   assert.equal(recorded[5].details?.additions, 1);
   assert.equal(recorded[5].details?.removals, 1);
   assert.equal(recorded[6].outcome.status, "failure");
+  assert.equal(recorded[6].details?.read_bytes, undefined);
+  assert.equal(recorded[7].outcome.status, "failure");
+  assert.equal(recorded[7].details?.exit_code, 7);
   assert.ok(!JSON.stringify(recorded).includes(source.trim()));
   assert.ok(!JSON.stringify(recorded).includes("export const before"));
 });
 
-test("disabled events never evaluate factories or create a spool", async (t) => {
+test("disabled events never serialize metadata or create a spool", async (t) => {
   const dir = join(await temporary(t), "absent");
   const spool = new EventSpool({ enabled: false, dir });
-  spool.enqueue(() => { throw new Error("must not evaluate"); });
+  spool.enqueue({ ...sample(), get details(): never { throw new Error("must not serialize"); } });
   await spool.close();
   await assert.rejects(stat(dir), { code: "ENOENT" });
 });
@@ -111,7 +115,7 @@ test("the FIFO writer enforces line size, segment size, retention and private mo
   let time = 10_000;
   const spool = new EventSpool({ enabled: true, dir, now: () => time,
     limits: { segmentBytes: 800, retentionBytes: 1800, retentionMs: 1000 }, warn: (code) => warnings.push(code) });
-  for (let i = 0; i < 9; i++) { spool.enqueue(() => sample()); await spool.flush(); time++; }
+  for (let i = 0; i < 9; i++) { spool.enqueue(sample()); await spool.flush(); time++; }
   assert.ok(warnings.indexOf("retention_limit_approaching") < warnings.indexOf("retention_removing_oldest_segment"));
   let total = 0;
   for (const name of await readdir(dir)) {
@@ -126,10 +130,10 @@ test("the FIFO writer enforces line size, segment size, retention and private mo
   assert.ok(total <= 1800);
   assert.equal((await stat(dir)).mode & 0o777, 0o700);
   time += 1001;
-  spool.enqueue(() => sample());
+  spool.enqueue(sample());
   await spool.flush();
   assert.equal((await readdir(dir)).length, 1);
-  spool.enqueue(() => ({ ...sample(), details: { oversized: "繁".repeat(20_000) } }));
+  spool.enqueue({ ...sample(), details: { oversized: "繁".repeat(20_000) } });
   await spool.close();
   assert.ok(warnings.includes("event_details_truncated"));
 });
@@ -151,7 +155,73 @@ test("observer write failures preserve successful results and original tool erro
   assert.equal(await handlers.get("other")!({ workspace_id: "workspace" }), response);
   await assert.rejects(handlers.get("failure")!({ workspace_id: "workspace" }), (error) => error === failure);
   await spool.flush();
-  assert.equal(warnings.filter((code) => code === "write_failed_event_dropped").length, 2);
+  assert.equal(warnings.filter((code) => code === "write_failed_event_dropped:EEXIST").length, 2);
+});
+
+test("retention expires idle segments without creating another event file", { skip: process.platform === "win32" }, async (t) => {
+  const dir = join(await temporary(t), "events");
+  const warnings: string[] = [];
+  let time = 10_000;
+  const spool = new EventSpool({ enabled: true, dir, now: () => time, limits: { retentionMs: 100 }, warn: (code) => warnings.push(code) });
+  t.after(() => spool.close());
+  spool.enqueue(sample());
+  await spool.flush();
+  assert.equal((await readdir(dir)).length, 1);
+  time += 101;
+  const deadline = Date.now() + 2000;
+  while ((await readdir(dir)).length && Date.now() < deadline) await new Promise((done) => setTimeout(done, 20));
+  await spool.flush();
+  assert.deepEqual(await readdir(dir), []);
+  assert.ok(warnings.includes("retention_removing_oldest_segment"));
+});
+
+test("process exit and signal failures affect outcomes without adding generic tool details", () => {
+  const registry = { eventContext: () => undefined } as unknown as WorkspaceRegistry;
+  const config = { events: { enabled: true } } as ServerConfig;
+  for (const [tool, result, status] of [
+    ["exec_command", { structuredContent: { exit_code: 1 } }, "failure"],
+    ["write_stdin", { structuredContent: { signal: "SIGTERM" } }, "failure"],
+    ["exec_command", { structuredContent: { exit_code: 0 } }, "success"],
+    ["exec_command", { structuredContent: { session_id: 1 } }, "success"],
+    ["bash", { details: { exitCode: 7 } }, "failure"],
+  ] as const) {
+    const event = toolEvent(tool, { workspace_id: "workspace" }, result, false, 1, new Date().toISOString(), config, registry);
+    assert.equal(event.outcome.status, status);
+    if (tool !== "bash") assert.equal(event.details, undefined);
+  }
+});
+
+test("retention warning fires once per approach episode and resets after pruning", { skip: process.platform === "win32" }, async (t) => {
+  const dir = join(await temporary(t), "events"), value = sample();
+  const bytes = Buffer.byteLength(JSON.stringify(value) + "\n");
+  const warnings: string[] = [];
+  const spool = new EventSpool({ enabled: true, dir, limits: { segmentBytes: bytes * 2, retentionBytes: bytes * 4 }, warn: (code) => warnings.push(code) });
+  t.after(() => spool.close());
+  for (let i = 0; i < 5; i++) { spool.enqueue({ ...value }); await spool.flush(); }
+  assert.equal(warnings.filter((code) => code === "retention_limit_approaching").length, 1);
+  spool.enqueue({ ...value });
+  await spool.flush();
+  assert.equal(warnings.filter((code) => code === "retention_limit_approaching").length, 2);
+});
+
+test("a directly created MCP server flushes its owned spool on close", { skip: process.platform === "win32" }, async (t) => {
+  const dir = await temporary(t), previousHome = process.env.HOME;
+  process.env.HOME = dir;
+  t.after(() => { if (previousHome === undefined) delete process.env.HOME; else process.env.HOME = previousHome; });
+  const config = loadConfig(writeTestDevspaceConfig(join(dir, "config"), {
+    events: { enabled: true }, workspaces: { allowedRoots: [dir] }, storage: { stateDir: join(dir, "state") },
+    tools: { mode: "claude" }, ui: { enabled: false }, skills: { enabled: false }, logging: { level: "silent" },
+  }));
+  const processes = new ProcessSessionManager();
+  const server = createMcpServer(config, new WorkspaceRegistry(config), createReviewCheckpointManager(), processes, () => [], []);
+  const client = new Client({ name: "owned-spool-test", version: "1.0.0" });
+  t.after(async () => { await client.close(); await server.close(); processes.shutdown(); });
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  await server.connect(serverTransport); await client.connect(clientTransport);
+  assert.ok(!(await client.callTool({ name: "open_workspace", arguments: { path: dir, mode: "checkout" } })).isError);
+  await server.close();
+  const recorded = await events(join(dir, ".local/share/devspace/events"));
+  assert.deepEqual(recorded.map((event) => event.tool), ["open_workspace"]);
 });
 
 test("privacy filters keep operational metadata and omit source, credentials and command arguments", () => {
