@@ -188,6 +188,11 @@ devspace doctor
 
 ## Documentation
 
+Optional tool completion observation (`events.enabled`, default `false`) writes
+private JSONL metadata for the paired Agent Memory forwarder. See
+[tool completion events](docs/configuration.md#tool-completion-events) for the
+whitelist, retention and required server deployment order.
+
 - [Setup Guide](https://github.com/Waishnav/devspace/blob/main/docs/setup.md)
 - [ChatGPT Coding Workflow](https://github.com/Waishnav/devspace/blob/main/docs/chatgpt-coding-workflow.md)
 - [Configuration Reference](https://github.com/Waishnav/devspace/blob/main/docs/configuration.md)

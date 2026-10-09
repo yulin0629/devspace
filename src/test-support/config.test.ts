@@ -8,6 +8,7 @@ type SectionOverrides = {
   server?: Partial<DevspaceConfig["server"]>;
   workspaces?: Partial<DevspaceConfig["workspaces"]>;
   storage?: Partial<DevspaceConfig["storage"]>;
+  events?: Partial<DevspaceConfig["events"]>;
   tools?: Partial<DevspaceConfig["tools"]>;
   ui?: Partial<DevspaceConfig["ui"]>;
   artifacts?: Partial<DevspaceConfig["artifacts"]>;
@@ -28,6 +29,7 @@ export function writeTestDevspaceConfig(
     server: { ...defaults.server, ...overrides.server },
     workspaces: { ...defaults.workspaces, ...overrides.workspaces },
     storage: { ...defaults.storage, ...overrides.storage },
+    events: { ...defaults.events, ...overrides.events },
     tools: { ...defaults.tools, ...overrides.tools },
     ui: { ...defaults.ui, ...overrides.ui },
     artifacts: { ...defaults.artifacts, ...overrides.artifacts },

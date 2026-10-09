@@ -37,6 +37,9 @@ Run `devspace init` to create both files. `devspace config set publicBaseUrl
   "storage": {
     "stateDir": "~/.local/share/devspace",
   },
+  "events": {
+    "enabled": false,
+  },
   "tools": {
     "mode": "codex",
   },
@@ -78,6 +81,44 @@ Run `devspace init` to create both files. `devspace config set publicBaseUrl
 Omitted sections and keys use the defaults shown above. An empty
 `workspaces.allowedRoots` uses the current working directory. Unknown keys are
 rejected so spelling mistakes cannot silently alter behavior.
+
+### Tool completion events
+
+`events.enabled` defaults to `false`; disabled observation creates no event
+directory or files. After the Agent Memory server supports UUID deduplication
+and its deployment is authorized and verified, set `events.enabled: true` and
+restart DevSpace. Events are independent of request/tool logging and remain off
+until explicitly enabled. The producer never starts a forwarder or manages
+authentication/tunnels.
+
+Events use `~/.local/share/devspace/events/`, a single asynchronous FIFO writer,
+on macOS and Linux in this first version,
+private `0700` directories and `0600` files. A record is at most 16 KiB including
+its newline, and segments rotate at 16 MiB. Retention removes oldest segments
+after seven days or at 1 GiB, whichever limit applies first. The writer warns
+at 80% of a retention limit and again before deleting retained segments. An
+event with oversized details drops those details; a still-oversized envelope
+is dropped with a warning. Write failures and queue overflow warn without
+changing MCP results. The in-memory queue holds at most 1,024 pending events;
+unflushed events can be lost when the process crashes.
+
+Each completion has `schema_version`, UUID `event_id`, `event_type`,
+`occurred_at`, `machine_id`, `workspace_id`, `project`, `cwd`, `tool` and
+`outcome` (status and elapsed milliseconds). Machine identity uses `tools.machine.name`
+when configured, otherwise the local hostname. Workspace/project/cwd come from
+the existing workspace registry; request metadata is not stored or treated as
+a global conversation identifier.
+
+The initial detailed whitelist covers `open_workspace` (path, mode, base ref,
+workspace ID), `read` (path, offset, limit, returned text bytes), `show_changes`
+(file/addition/removal counts), `write` (path, content bytes, lines), `edit`
+(path, edit count, old/new bytes) and `bash` (filtered command summary, working
+directory, available exit code and bounded status output). Other tools retain
+only the envelope/outcome. In Codex mode, `apply_patch`, `exec_command` and
+`write_stdin` therefore record generic completion events.
+
+The paired forwarder and deployment sequence are documented in
+[Agent Memory's DevSpace integration](https://github.com/yulin0629/agentmemory/tree/feat/devspace-event-observation/integrations/devspace-forwarder).
 
 `oauth.allowedResourceUrls` accepts exact alternate MCP resource URLs for
 clients that connect through a resource alias, such as a secure MCP tunnel.

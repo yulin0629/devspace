@@ -37,6 +37,7 @@ export interface ServerConfig {
   subagents: SubagentsConfig;
   agentDir: string;
   logging: LoggingConfig;
+  events?: { enabled: boolean };
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
@@ -95,6 +96,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
       ...stored.logging,
       trustProxy: stored.server.trustProxy,
     },
+    events: stored.events,
   };
 }
 

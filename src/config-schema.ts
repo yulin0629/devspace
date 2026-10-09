@@ -83,6 +83,7 @@ export const devspaceConfigSchema = z.object({
   server: serverConfigSchema,
   workspaces: workspacesConfigSchema,
   storage: storageConfigSchema,
+  events: z.object({ enabled: z.boolean().default(false) }).strict().prefault({}),
   tools: toolsConfigSchema,
   ui: uiConfigSchema,
   artifacts: artifactsConfigSchema,

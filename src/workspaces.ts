@@ -261,6 +261,11 @@ export class WorkspaceRegistry {
     };
   }
 
+  eventContext(workspaceId: string): { project: string; cwd: string } | undefined {
+    const workspace = this.workspaces.get(workspaceId);
+    return workspace ? { project: basename(workspace.sourceRoot ?? workspace.root), cwd: workspace.root } : undefined;
+  }
+
   async getWorkspace(workspaceId: string): Promise<Workspace> {
     const workspace = this.workspaces.get(workspaceId);
     if (workspace) {
