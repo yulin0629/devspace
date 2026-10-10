@@ -178,7 +178,13 @@ export class EventSpool {
         throw error;
       }
     }
-    await this.current.file.writeFile(line);
+    try {
+      await this.current.file.writeFile(line);
+    } catch (error) {
+      try { await this.current.file.truncate(this.current.bytes); }
+      catch { this.warn("partial_write_rollback_failed"); }
+      throw error;
+    }
     this.current.bytes += bytes;
   }
 

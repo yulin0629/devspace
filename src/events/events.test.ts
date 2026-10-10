@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, open, readFile, readdir, rm, stat, writeFile, type FileHandle } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -177,6 +177,30 @@ test("retention expires idle segments without creating another event file", { sk
   assert.ok(warnings.includes("retention_removing_oldest_segment"));
 });
 
+test("a partial write failure retains complete earlier records and does not leave an incomplete tail", { skip: process.platform === "win32" }, async (t) => {
+  const dir = join(await temporary(t), "events"), warnings: string[] = [];
+  const spool = new EventSpool({ enabled: true, dir, warn: (code) => warnings.push(code) });
+  t.after(() => spool.close());
+  const first = sample(), failed = sample(), last = sample();
+  spool.enqueue(first); await spool.flush();
+  const handle = await open(dir, "r"), prototype = Object.getPrototypeOf(handle), write = prototype.writeFile;
+  await handle.close();
+  const injected = t.mock.method(prototype, "writeFile", async function (this: FileHandle, line: string) {
+    if (line.includes(failed.event_id)) {
+      await write.call(this, line.slice(0, 80));
+      throw Object.assign(new Error("partial_write"), { code: "EIO" });
+    }
+    return write.call(this, line);
+  });
+  spool.enqueue(failed); spool.enqueue(last); await spool.flush();
+  injected.mock.restore();
+  assert.deepEqual(await events(dir), [first, last]);
+  for (const name of (await readdir(dir)).filter((name) => name.endsWith(".jsonl"))) {
+    assert.ok((await readFile(join(dir, name), "utf8")).endsWith("\n"));
+  }
+  assert.ok(warnings.includes("write_failed_event_dropped:EIO"));
+});
+
 test("retention preserves another process's open segment until its writer closes", { skip: process.platform === "win32", timeout: 15_000 }, async (t) => {
   const dir = join(await temporary(t), "events"), value = sample();
   const script = `
@@ -299,6 +323,7 @@ test("privacy filters keep operational metadata and omit source, credentials and
   assert.equal(statusOutput("const token = 'fixture';\nPASS"), "PASS");
   assert.equal(statusOutput("password=fixture"), "[output omitted]");
   assert.equal(redact("src/feature-file.ts"), "src/feature-file.ts");
+  assert.equal(redact("Bearer abc~fixture/_.+-=="), "[redacted]");
   assert.equal(redact("api_key=fixture-value"), "api_key=[redacted]");
   assert.ok(!redact('{"token":"fixture-value"}').includes("fixture-value"));
   assert.equal(redact("data:image/png;base64,ZmFrZQ=="), "[attachment omitted]");

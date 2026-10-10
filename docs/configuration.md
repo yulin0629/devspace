@@ -108,7 +108,10 @@ An active writer also checks idle segments once per minute through
 the same FIFO, so expiration does not depend on another tool completion. An
 event with oversized details drops those details; a still-oversized envelope
 is dropped with a warning. Write failures and queue overflow warn without
-changing MCP results. Failure warnings include a sanitized filesystem error
+changing MCP results. A partial write is truncated back to the previous complete
+record before closing the failed segment. If truncation itself fails, a
+`partial_write_rollback_failed` warning identifies the incomplete tail for
+operator inspection. Failure warnings include a sanitized filesystem error
 code; paths and exception messages are excluded. The in-memory queue holds
 at most 1,024 pending events;
 unflushed events can be lost when the process crashes.
