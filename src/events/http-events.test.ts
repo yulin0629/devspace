@@ -10,6 +10,9 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { loadConfig } from "../config.js";
 import { createServer } from "../server.js";
+import { SingleUserOAuthProvider } from "../oauth-provider.js";
+import { ProcessSessionManager } from "../process-sessions.js";
+import { SqliteWorkspaceStore } from "../workspace-store.js";
 import { writeTestDevspaceConfig } from "../test-support/config.test.js";
 import { EventSpool } from "./spool.js";
 
@@ -55,7 +58,7 @@ for (const enabled of [true, false]) test(`HTTP MCP events.enabled=${enabled} pr
   ] as const) assert.ok(!(await call(name, args)).isError);
   await spool.flush();
   if (enabled) {
-    const chunks = await Promise.all((await readdir(spool.dir)).map((name) => readFile(join(spool.dir, name), "utf8")));
+    const chunks = await Promise.all((await readdir(spool.dir)).filter((name) => name.endsWith(".jsonl")).map((name) => readFile(join(spool.dir, name), "utf8")));
     const events = chunks.join("").trim().split("\n").map((line) => JSON.parse(line));
     assert.deepEqual(events.map((event) => event.tool), ["open_workspace", "open_workspace", "read", "write", "edit", "bash", "show_changes"]);
     assert.equal(new Set(events.map((event) => event.event_id)).size, 7);
@@ -63,4 +66,26 @@ for (const enabled of [true, false]) test(`HTTP MCP events.enabled=${enabled} pr
     assert.ok(!JSON.stringify(events).includes("conversation-fixture"));
     assert.ok(!JSON.stringify(events).includes("export const example"));
   } else await assert.rejects(stat(spool.dir), { code: "ENOENT" });
+});
+
+test("server close still shuts down processes and stores when spool close fails", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "devspace-close-events-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const config = loadConfig(writeTestDevspaceConfig(join(root, "config"), {
+    storage: { stateDir: join(root, "state") }, workspaces: { allowedRoots: [root] },
+    ui: { enabled: false }, skills: { enabled: false }, logging: { level: "silent" },
+  }));
+  const spool = new EventSpool({ enabled: false, dir: join(root, "spool") });
+  const failure = new Error("spool_close_failure");
+  t.mock.method(spool, "close", async () => { throw failure; });
+  const processes = t.mock.method(ProcessSessionManager.prototype, "shutdown", ProcessSessionManager.prototype.shutdown);
+  const oauth = t.mock.method(SingleUserOAuthProvider.prototype, "close", SingleUserOAuthProvider.prototype.close);
+  const workspace = t.mock.method(SqliteWorkspaceStore.prototype, "close", SqliteWorkspaceStore.prototype.close);
+  const running = createServer(config, { eventSpool: spool, incomingArtifactAdapters: [] });
+  await assert.rejects(running.close(), (error) => error === failure);
+  assert.equal(processes.mock.callCount(), 1);
+  assert.equal(oauth.mock.callCount(), 1);
+  assert.equal(workspace.mock.callCount(), 1);
+  await assert.rejects(running.close(), (error) => error === failure);
+  assert.equal(workspace.mock.callCount(), 1);
 });

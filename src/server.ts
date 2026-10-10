@@ -1082,10 +1082,13 @@ export function createServer(
           });
         }
         await toolActivities.waitForIdle();
-        await eventSpool.close();
-        processSessions.shutdown();
-        oauthProvider.close();
-        workspaceStore.close?.();
+        try {
+          await eventSpool.close();
+        } finally {
+          processSessions.shutdown();
+          oauthProvider.close();
+          workspaceStore.close?.();
+        }
       })();
       return closePromise;
     },

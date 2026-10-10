@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { once } from "node:events";
 import { mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -122,6 +123,7 @@ test("the FIFO writer enforces line size, segment size, retention and private mo
     const info = await stat(join(dir, name));
     assert.ok(info.size <= 800); total += info.size;
     assert.equal(info.mode & 0o777, 0o600);
+    if (!name.endsWith(".jsonl")) continue;
     for (const line of (await readFile(join(dir, name), "utf8")).trim().split("\n")) {
       assert.ok(Buffer.byteLength(line + "\n") <= EVENT_LIMITS.eventBytes);
       JSON.parse(line);
@@ -132,7 +134,7 @@ test("the FIFO writer enforces line size, segment size, retention and private mo
   time += 1001;
   spool.enqueue(sample());
   await spool.flush();
-  assert.equal((await readdir(dir)).length, 1);
+  assert.equal((await readdir(dir)).filter((name) => name.endsWith(".jsonl")).length, 1);
   spool.enqueue({ ...sample(), details: { oversized: "繁".repeat(20_000) } });
   await spool.close();
   assert.ok(warnings.includes("event_details_truncated"));
@@ -166,13 +168,62 @@ test("retention expires idle segments without creating another event file", { sk
   t.after(() => spool.close());
   spool.enqueue(sample());
   await spool.flush();
-  assert.equal((await readdir(dir)).length, 1);
+  assert.equal((await readdir(dir)).filter((name) => name.endsWith(".jsonl")).length, 1);
   time += 101;
   const deadline = Date.now() + 2000;
   while ((await readdir(dir)).length && Date.now() < deadline) await new Promise((done) => setTimeout(done, 20));
   await spool.flush();
   assert.deepEqual(await readdir(dir), []);
   assert.ok(warnings.includes("retention_removing_oldest_segment"));
+});
+
+test("retention preserves another process's open segment until its writer closes", { skip: process.platform === "win32", timeout: 15_000 }, async (t) => {
+  const dir = join(await temporary(t), "events"), value = sample();
+  const script = `
+    import { EventSpool } from ${JSON.stringify(new URL("./spool.ts", import.meta.url).href)};
+    const spool = new EventSpool({ enabled: true, dir: ${JSON.stringify(dir)}, now: () => 10_000, limits: { retentionMs: 1000 } });
+    const value = ${JSON.stringify(value)};
+    spool.enqueue(value); await spool.flush(); process.send("ready");
+    process.on("message", async (command) => {
+      if (command === "append") { spool.enqueue(value); await spool.flush(); process.send("appended"); }
+      if (command === "close") { await spool.close(); process.send("closed"); process.disconnect(); }
+    });
+  `;
+  const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "--eval", script], { stdio: ["ignore", "pipe", "pipe", "ipc"] });
+  let errors = "";
+  child.stderr!.on("data", (data) => { errors += data; });
+  t.after(() => { if (child.exitCode === null) child.kill(); });
+  const ready = await Promise.race([once(child, "message"), once(child, "exit").then(() => { throw new Error(errors || "writer exited before ready"); })]);
+  assert.equal(ready[0], "ready");
+  const activeName = (await readdir(dir)).find((name) => name.endsWith(".jsonl"))!;
+  const warnings: string[] = [];
+  const spool = new EventSpool({ enabled: true, dir, now: () => 20_000, limits: { retentionMs: 1000 }, warn: (code) => warnings.push(code) });
+  t.after(() => spool.close());
+  spool.enqueue(sample()); await spool.flush();
+  assert.ok((await stat(join(dir, activeName))).size > 0);
+  const appended = once(child, "message"); child.send("append");
+  assert.equal((await appended)[0], "appended");
+  assert.equal((await readFile(join(dir, activeName), "utf8")).trim().split("\n").length, 2);
+  const closed = once(child, "message"), exited = once(child, "exit"); child.send("close");
+  assert.equal((await closed)[0], "closed");
+  assert.equal((await exited)[0], 0);
+  spool.enqueue(sample()); await spool.flush();
+  await assert.rejects(stat(join(dir, activeName)), { code: "ENOENT" });
+  assert.ok(warnings.includes("retention_removing_oldest_segment"));
+});
+
+test("retention drops an incoming event rather than deleting a live foreign segment", { skip: process.platform === "win32" }, async (t) => {
+  const dir = join(await temporary(t), "events"), value = sample();
+  const bytes = Buffer.byteLength(JSON.stringify(value) + "\n");
+  const first = new EventSpool({ enabled: true, dir });
+  t.after(() => first.close());
+  first.enqueue(value); await first.flush();
+  const warnings: string[] = [];
+  const second = new EventSpool({ enabled: true, dir, limits: { retentionBytes: bytes }, warn: (code) => warnings.push(code) });
+  t.after(() => second.close());
+  second.enqueue(sample()); await second.flush();
+  assert.deepEqual(await events(dir), [value]);
+  assert.ok(warnings.includes("retention_active_segments_event_dropped"));
 });
 
 test("process exit and signal failures affect outcomes without adding generic tool details", () => {

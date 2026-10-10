@@ -97,7 +97,14 @@ private `0700` directories and `0600` files. A record is at most 16 KiB includin
 its newline, and segments rotate at 16 MiB. Retention removes oldest segments
 after seven days or at 1 GiB, whichever limit applies first. The writer warns
 once per crossing of 80% of a retention limit and again before deleting retained
-segments. An active writer also checks idle segments once per minute through
+segments. Each open segment has a private `.active` PID marker created before
+the JSONL file. Retention preserves segments owned by live processes, including
+other DevSpace instances sharing this directory. Closed segments and segments
+whose marked process has exited can be reclaimed. Invalid/unreadable markers
+and reused PIDs conservatively defer deletion. If protected segments leave no
+capacity, incoming events are dropped with a warning. Concurrent writers can
+temporarily exceed the byte limit between independent capacity checks.
+An active writer also checks idle segments once per minute through
 the same FIFO, so expiration does not depend on another tool completion. An
 event with oversized details drops those details; a still-oversized envelope
 is dropped with a warning. Write failures and queue overflow warn without

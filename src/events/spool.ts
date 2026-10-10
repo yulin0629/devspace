@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { chmod, lstat, mkdir, open, readdir, unlink, type FileHandle } from "node:fs/promises";
+import { chmod, lstat, mkdir, open, readFile, readdir, unlink, type FileHandle } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -81,15 +81,13 @@ export class EventSpool {
         else {
           this.maintenanceQueued = false;
           if (this.current && this.now() - this.current.created >= this.limits.retentionMs) {
-            await this.current.file.close();
-            this.current = undefined;
+            await this.closeCurrent();
           }
           await this.prune(0);
         }
       }
       catch (error) {
-        await this.current?.file.close().catch(() => {});
-        this.current = undefined;
+        await this.closeCurrent().catch(() => {});
         this.initialized = false;
         const code = (error as NodeJS.ErrnoException)?.code;
         this.warn(`${next ? "write_failed_event_dropped" : "retention_failed"}:${code && IO_CODES.has(code) ? code : "UNKNOWN"}`);
@@ -107,8 +105,33 @@ export class EventSpool {
     await this.flush();
     clearInterval(this.retentionTimer);
     this.retentionTimer = undefined;
-    await this.current?.file.close();
+    await this.closeCurrent();
+  }
+
+  private async closeCurrent(): Promise<void> {
+    const current = this.current;
     this.current = undefined;
+    if (!current) return;
+    await current.file.close();
+    try { await unlink(join(this.dir, `${current.name}.active`)); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+  }
+
+  private async isActive(name: string): Promise<boolean> {
+    const marker = join(this.dir, `${name}.active`);
+    try {
+      const info = await lstat(marker);
+      if (!info.isFile() || info.size > 32) return true;
+      const value = await readFile(marker, "utf8");
+      if (!/^[1-9]\d*\n$/.test(value)) return true;
+      const pid = Number(value.trim());
+      if (!Number.isSafeInteger(pid)) return true;
+      try { process.kill(pid, 0); return true; }
+      catch (error) { return (error as NodeJS.ErrnoException).code !== "ESRCH"; }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      return true;
+    }
   }
 
   private async append(event: ToolEvent): Promise<void> {
@@ -138,25 +161,34 @@ export class EventSpool {
     }
     if (this.current && (this.current.bytes + bytes > this.limits.segmentBytes
       || this.now() - this.current.created >= this.limits.retentionMs)) {
-      await this.current.file.close();
-      this.current = undefined;
+      await this.closeCurrent();
     }
-    await this.prune(bytes);
+    if (!await this.prune(bytes)) { this.warn("retention_active_segments_event_dropped"); return; }
     if (!this.current) {
       const created = this.now();
       const name = `${created}-${randomUUID()}.jsonl`;
-      const file = await open(join(this.dir, name), "wx", 0o600);
-      this.current = { file, name, bytes: 0, created };
+      // Publish ownership before the JSONL file can be seen by another process's pruner.
+      const marker = await open(join(this.dir, `${name}.active`), "wx", 0o600);
+      try {
+        try { await marker.writeFile(`${process.pid}\n`); } finally { await marker.close(); }
+        const file = await open(join(this.dir, name), "wx", 0o600);
+        this.current = { file, name, bytes: 0, created };
+      } catch (error) {
+        await unlink(join(this.dir, `${name}.active`)).catch(() => {});
+        throw error;
+      }
     }
     await this.current.file.writeFile(line);
     this.current.bytes += bytes;
   }
 
-  private async prune(incoming: number): Promise<void> {
+  private async prune(incoming: number): Promise<boolean> {
     const files: Array<{ name: string; bytes: number; created: number }> = [];
     for (const name of await readdir(this.dir)) {
       if (!SEGMENT_NAME.test(name)) continue;
-      const info = await lstat(join(this.dir, name));
+      let info;
+      try { info = await lstat(join(this.dir, name)); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") continue; throw error; }
       if (info.isFile()) files.push({ name, bytes: info.size, created: Number(name.split("-")[0]) });
     }
     files.sort((a, b) => a.created - b.created || a.name.localeCompare(b.name));
@@ -168,11 +200,16 @@ export class EventSpool {
     for (const file of files) {
       if (file.name === this.current?.name) continue;
       if (total <= this.limits.retentionBytes && this.now() - file.created < this.limits.retentionMs) continue;
+      if (await this.isActive(file.name)) continue;
       this.warn("retention_removing_oldest_segment");
-      await unlink(join(this.dir, file.name));
+      try { await unlink(join(this.dir, file.name)); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+      try { await unlink(join(this.dir, `${file.name}.active`)); }
+      catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
       total -= file.bytes;
       retained.delete(file.name);
     }
     this.retentionApproaching = approaching();
+    return total <= this.limits.retentionBytes;
   }
 }
