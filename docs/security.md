@@ -122,6 +122,21 @@ DevSpace does not extract or execute transferred content.
 
 ## Logs
 
+Optional `events.enabled` observation stores tool completion metadata in a
+private JSONL spool. It defaults to false and is separate from logging.
+Source, attachments, raw tool inputs and full results are excluded. Only the
+six documented tools have detailed whitelist fields. Bash summaries omit
+arguments; output retains only bounded operational status/count lines, with
+other output replaced by `[output omitted]`. Filters redact credential formats,
+assignments, auth headers, private keys and URL credentials in metadata.
+Machine/workspace identifiers requiring filtering use SHA-256 pseudonyms to
+preserve distinct session identities without storing their plaintext.
+Arbitrary secrets disguised as ordinary filenames cannot be identified reliably.
+Forwarder delivery repeats these filters before calling Agent Memory.
+
+See [tool completion events](configuration.md#tool-completion-events) for
+retention, failure handling and the server deployment gate.
+
 By default, DevSpace logs requests and tool calls. Shell command previews are
 disabled unless `logging.shellCommands` is `true`.
 

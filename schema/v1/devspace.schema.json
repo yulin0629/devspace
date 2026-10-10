@@ -88,6 +88,17 @@
       },
       "additionalProperties": false
     },
+    "events": {
+      "default": {},
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
     "tools": {
       "default": {},
       "type": "object",

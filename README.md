@@ -188,6 +188,19 @@ devspace doctor
 
 ## Documentation
 
+Optional tool completion observation (`events.enabled`, default `false`) writes
+private JSONL metadata for the paired Agent Memory forwarder. See
+[tool completion events](docs/configuration.md#tool-completion-events) for the
+whitelist, retention and required server deployment order.
+
+Maintain the three privacy filters together: this repository's
+`src/events/privacy.ts`, Agent Memory's
+`integrations/devspace-forwarder/src/privacy.mjs`, and its
+`src/functions/privacy.ts`. DevSpace supplies less context than CLI hooks and
+does not supply `contextProjectId`. The existing iii file store can acknowledge
+an observation up to five seconds before its periodic disk flush; see the
+[forwarder limitations](https://github.com/yulin0629/agentmemory/blob/feat/devspace-event-observation/integrations/devspace-forwarder/README.md#privacy-and-limitations).
+
 - [Setup Guide](https://github.com/Waishnav/devspace/blob/main/docs/setup.md)
 - [ChatGPT Coding Workflow](https://github.com/Waishnav/devspace/blob/main/docs/chatgpt-coding-workflow.md)
 - [Configuration Reference](https://github.com/Waishnav/devspace/blob/main/docs/configuration.md)

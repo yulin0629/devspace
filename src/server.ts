@@ -43,6 +43,8 @@ import {
 import { ProcessSessionManager } from "./process-sessions.js";
 import { createReviewCheckpointManager } from "./review-checkpoints.js";
 import { conversationScopeIdFromRequestMeta } from "./request-meta.js";
+import { EventSpool } from "./events/spool.js";
+import { withEventObservation } from "./events/observation.js";
 import { shutdownHttpServer } from "./server-shutdown.js";
 import { formatPathForPrompt, formatSkillUri } from "./skills.js";
 import { isPathInsideRoot } from "./roots.js";
@@ -351,7 +353,14 @@ export function createMcpServer(
   resolveLocalAgentProviders: () => LocalAgentProviderStatus[],
   incomingArtifactAdapters: readonly IncomingArtifactAdapter[],
   trackToolActivity?: TrackToolActivity,
+  eventSpool?: EventSpool,
 ): McpServer {
+  const ownedSpool = eventSpool === undefined;
+  const spool = eventSpool ?? new EventSpool({ enabled: config.events?.enabled ?? false });
+  const ownedActivity = ownedSpool && config.events?.enabled ? new ToolActivityTracker() : undefined;
+  const tracking: TrackToolActivity | undefined = ownedActivity
+    ? <T>(operation: () => Promise<T>) => ownedActivity.track(() => trackToolActivity ? trackToolActivity(operation) : operation())
+    : trackToolActivity;
   const toolSurface = getToolSurface(config.toolMode);
   const server = new McpServer(
     mcpServerInfo(),
@@ -368,8 +377,17 @@ export function createMcpServer(
     processSessions,
     resolveLocalAgentProviders,
     incomingArtifactAdapters,
-    trackToolActivity,
+    tracking,
+    spool,
   );
+  if (ownedSpool) {
+    const close = server.close.bind(server);
+    server.close = async () => {
+      await close();
+      await ownedActivity?.waitForIdle();
+      await spool.close();
+    };
+  }
   return server;
 }
 
@@ -381,12 +399,14 @@ function registerMcpSurface(
   processSessions: ProcessSessionManager,
   resolveLocalAgentProviders: () => LocalAgentProviderStatus[],
   incomingArtifactAdapters: readonly IncomingArtifactAdapter[],
-  trackToolActivity?: TrackToolActivity,
+  trackToolActivity: TrackToolActivity | undefined,
+  eventSpool: EventSpool,
 ): void {
   const labeledServer = withMachineLabel(server, config);
-  const registrationTarget = trackToolActivity
+  const trackedServer = trackToolActivity
     ? withTrackedToolHandlers(labeledServer, trackToolActivity)
     : labeledServer;
+  const registrationTarget = withEventObservation(trackedServer, config, workspaces, eventSpool);
   const toolSurface = getToolSurface(config.toolMode);
 
   registerAppResource(
@@ -852,6 +872,7 @@ function withTrackedToolHandlers(
 
 export interface CreateServerOptions {
   incomingArtifactAdapters?: readonly IncomingArtifactAdapter[];
+  eventSpool?: EventSpool;
 }
 
 export function createServer(
@@ -900,6 +921,7 @@ export function createServer(
   const reviewCheckpoints = createReviewCheckpointManager();
   const processSessions = new ProcessSessionManager();
   const toolActivities = new ToolActivityTracker();
+  const eventSpool = options.eventSpool ?? new EventSpool({ enabled: config.events?.enabled ?? false });
   const localAgentProviders = buildLocalAgentProviderStatuses(
     config.subagents,
     getLocalAgentProviderAvailabilitySnapshot(process.env, config.subagents),
@@ -919,6 +941,7 @@ export function createServer(
       resolveLocalAgentProviders,
       incomingArtifactAdapters,
       toolActivities.track,
+      eventSpool,
     );
   });
   const logMcpHandlerError = (error: Error) => logEvent(
@@ -1059,9 +1082,13 @@ export function createServer(
           });
         }
         await toolActivities.waitForIdle();
-        processSessions.shutdown();
-        oauthProvider.close();
-        workspaceStore.close?.();
+        try {
+          await eventSpool.close();
+        } finally {
+          processSessions.shutdown();
+          oauthProvider.close();
+          workspaceStore.close?.();
+        }
       })();
       return closePromise;
     },
